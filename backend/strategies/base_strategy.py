@@ -1,6 +1,8 @@
+import time
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from services.okx_client import OKXClient
+from database import SessionLocal
 
 
 class BaseStrategy(ABC):

@@ -145,7 +145,7 @@ def create_instance(
     if not template:
         raise HTTPException(status_code=404, detail="策略模板不存在")
 
-    merged_params = {**template.default_params, **body.params}
+    merged_params = {**template.default_params, **body.params, "symbol": body.symbol}
     instance = StrategyInstance(
         template_id=body.template_id,
         account_id=body.account_id,

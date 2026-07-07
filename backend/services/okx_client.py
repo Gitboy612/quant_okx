@@ -237,21 +237,31 @@ class OKXClient:
             "side": side,
             "ordType": ord_type,
             "sz": sz,
+            "tdMode": "cross" if "-SWAP" in inst_id else "cash",
         }
-        body.pop("tdMode", None)
-        if "-SWAP" in inst_id:
-            body["tdMode"] = "cross"
         if px and ord_type == "limit":
             body["px"] = px
-        import os, json as _json
-        try:
-            log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'logs')
-            os.makedirs(log_dir, exist_ok=True)
-            with open(os.path.join(log_dir, 'debug_place_order.txt'), 'a', encoding='utf-8') as _df:
-                _df.write(_json.dumps(body) + '\n')
-        except Exception:
-            pass
         return self._request("POST", "/api/v5/trade/order", body)
+
+    def batch_place_orders(self, orders: list[dict]) -> dict:
+        """Batch place up to 20 orders at once.
+        Each order dict: {"instId": str, "side": "buy"|"sell", "ordType": "limit",
+                          "sz": str, "px": str}
+        tdMode is auto-added based on instId.
+        """
+        batch_body = []
+        for o in orders:
+            item = {
+                "instId": o["instId"],
+                "side": o["side"],
+                "ordType": o.get("ordType", "limit"),
+                "sz": o["sz"],
+                "tdMode": "cross" if "-SWAP" in o["instId"] else "cash",
+            }
+            if "px" in o:
+                item["px"] = o["px"]
+            batch_body.append(item)
+        return self._request("POST", "/api/v5/trade/batch-orders", batch_body)
 
     def cancel_order(self, inst_id: str, order_id: str):
         body = {"instId": inst_id, "ordId": order_id}

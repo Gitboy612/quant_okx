@@ -237,7 +237,7 @@ class StrategyEngine:
                         "lower_price": {"label": "价格下限", "type": "number", "default": 40000, "min": 1, "step": 1, "hint": "网格价格区间的下限"},
                         "grid_count": {"label": "网格数量", "type": "number", "default": 10, "min": 2, "max": 200, "step": 1, "hint": "区间内布设的网格线条数，越多越密集"},
                         "order_qty": {"label": "单格交易量", "type": "number", "default": 0.01, "min": 0.0001, "step": 0.001, "hint": "每触及一格买卖的币数量"},
-                        "symbol": {"label": "交易对", "type": "select", "default": "BTC-USDT", "options": ["BTC-USDT", "ETH-USDT", "SOL-USDT", "BNB-USDT"]},
+                        "symbol": {"label": "交易对", "type": "select", "default": "BTC-USDT", "options": ["BTC-USDT", "ETH-USDT", "SOL-USDT", "BNB-USDT", "BTC-USDT-SWAP", "ETH-USDT-SWAP", "SOL-USDT-SWAP"]},
                     },
                     is_builtin=True,
                 ),
