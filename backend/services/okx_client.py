@@ -1,0 +1,273 @@
+import base64
+import hashlib
+import hmac
+import json
+import time
+from datetime import datetime, timezone
+import httpx
+import os
+from database import SessionLocal
+from services.encryption_service import decrypt
+from config import OKX_BASE_URL, OKX_DNS_OVERRIDE
+
+
+class OKXClient:
+    _time_offset_ms: float = 0.0
+
+    def __init__(self, api_key_encrypted: str, secret_encrypted: str, passphrase_encrypted: str | None,
+                 trade_mode: str = "demo", strategy_instance_id: int | None = None, account_name: str | None = None):
+        self.api_key = decrypt(api_key_encrypted)
+        self.secret_key = decrypt(secret_encrypted)
+        self.passphrase = decrypt(passphrase_encrypted) if passphrase_encrypted else ""
+        self.base_url = OKX_BASE_URL
+        self.trade_mode = trade_mode
+        self.strategy_instance_id = strategy_instance_id
+        self.account_name = account_name
+        self._dns_map = self._build_dns_map()
+        proxy_url = os.getenv("OKX_PROXY", "")
+        self._client = httpx.Client(
+            timeout=15,
+            follow_redirects=True,
+            proxy=proxy_url if proxy_url else None,
+            transport=self._make_transport(),
+        )
+        self._sync_time()
+
+    def _build_dns_map(self) -> dict[str, str]:
+        mapping: dict[str, str] = {}
+        if OKX_DNS_OVERRIDE:
+            for pair in OKX_DNS_OVERRIDE.split(","):
+                pair = pair.strip()
+                if ":" in pair:
+                    host, ip = pair.split(":", 1)
+                    mapping[host.strip()] = ip.strip()
+        return mapping
+
+    def _make_transport(self):
+        if not self._dns_map:
+            return None
+        dns_map = self._dns_map
+        class DNSOverrideTransport(httpx.HTTPTransport):
+            def handle_request(self, request):
+                from urllib.parse import urlparse
+                parsed = urlparse(str(request.url))
+                host = parsed.hostname or ""
+                if host in dns_map:
+                    request.url = request.url.copy_with(host=dns_map[host])
+                    request.headers["Host"] = host
+                return super().handle_request(request)
+        return DNSOverrideTransport()
+
+    def _server_now_ms(self) -> int:
+        return int(time.time() * 1000) + int(OKXClient._time_offset_ms)
+
+    def _iso_timestamp(self) -> str:
+        ts_s = self._server_now_ms() / 1000.0
+        dt = datetime.fromtimestamp(ts_s, tz=timezone.utc)
+        return dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
+
+    def _sync_time(self, silent: bool = False) -> bool:
+        headers = {}
+        if self.trade_mode == "demo":
+            headers["x-simulated-trading"] = "1"
+        for attempt in range(3):
+            try:
+                url = self.base_url + "/api/v5/public/time"
+                resp = self._client.get(url, timeout=5, headers=headers)
+                raw = resp.text.strip()
+                if not raw:
+                    if not silent:
+                        self._log_system("SYNC_TIME_FAIL", f"attempt={attempt+1} status={resp.status_code} body=empty")
+                    time.sleep(1)
+                    continue
+                data = resp.json()
+                if data.get("code") == "0" and data.get("data"):
+                    server_ts_ms = float(data["data"][0]["ts"])
+                    local_ts_ms = time.time() * 1000
+                    OKXClient._time_offset_ms = server_ts_ms - local_ts_ms
+                    if not silent:
+                        self._log_system("SYNC_TIME_OK", f"offset={OKXClient._time_offset_ms:.0f}ms server={datetime.fromtimestamp(server_ts_ms/1000, tz=timezone.utc).isoformat()}")
+                    return True
+                else:
+                    if not silent:
+                        self._log_system("SYNC_TIME_FAIL", f"attempt={attempt+1} code={data.get('code')} msg={data.get('msg','')}")
+            except Exception as e:
+                if not silent:
+                    self._log_system("SYNC_TIME_ERR", f"attempt={attempt+1} {e}")
+            time.sleep(1)
+        return False
+
+    def _sign(self, timestamp: str, method: str, path: str, body: str = "") -> str:
+        message = timestamp + method + path + body
+        mac = hmac.new(self.secret_key.encode(), message.encode(), hashlib.sha256)
+        return base64.b64encode(mac.digest()).decode()
+
+    def _log_system(self, event: str, detail: str):
+        try:
+            from services.log_service import log_api_call
+            log_api_call(
+                account_name=self.account_name,
+                method="SYSTEM",
+                endpoint=event,
+                status="info",
+                response_code="0",
+                request_body=detail,
+                response_body="",
+            )
+        except Exception:
+            pass
+
+    def _log_call(self, endpoint: str, method: str, request_body: str, response_body: str,
+                  response_code: str, status: str, req_meta: str = ""):
+        log_req = f"{req_meta} | body={request_body}" if request_body else req_meta
+        try:
+            db = SessionLocal()
+            from models.api_call_log import ApiCallLog
+            log = ApiCallLog(
+                strategy_instance_id=self.strategy_instance_id,
+                account_name=self.account_name,
+                endpoint=endpoint,
+                method=method,
+                request_body=log_req[:4000] if log_req else None,
+                response_code=response_code,
+                response_body=response_body[:4000] if response_body else None,
+                status=status,
+            )
+            db.add(log)
+            db.commit()
+            db.close()
+        except Exception:
+            pass
+
+        try:
+            from services.log_service import log_api_call
+            log_api_call(
+                account_name=self.account_name,
+                method=method,
+                endpoint=endpoint,
+                status=status,
+                response_code=response_code,
+                request_body=log_req,
+                response_body=response_body,
+            )
+        except Exception:
+            pass
+
+    def _request(self, method: str, path: str, body: dict | None = None, _retry: bool = True) -> dict:
+        timestamp = self._iso_timestamp()
+        body_str = json.dumps(body) if body else ""
+        sign = self._sign(timestamp, method, path, body_str)
+
+        headers = {
+            "OK-ACCESS-KEY": self.api_key,
+            "OK-ACCESS-SIGN": sign,
+            "OK-ACCESS-TIMESTAMP": timestamp,
+            "OK-ACCESS-PASSPHRASE": self.passphrase,
+            "Content-Type": "application/json",
+        }
+        if self.trade_mode == "demo":
+            headers["x-simulated-trading"] = "1"
+
+        req_meta = f"v2 mode={'demo' if self.trade_mode == 'demo' else 'live'} ts={timestamp} sign={sign[:16]}... key={self.api_key[:12]}... pass={self.passphrase[:4]}*** offset_ms={OKXClient._time_offset_ms:.0f}"
+
+        url = self.base_url + path
+        try:
+            resp = self._client.request(method, url, headers=headers, content=body_str if body_str else None)
+            raw_text = resp.text.strip()
+            if not raw_text:
+                content_type = resp.headers.get("content-type", "unknown")
+                location = resp.headers.get("location", "")
+                resp_json = {
+                    "code": "-1",
+                    "msg": f"OKX 返回空响应 (HTTP {resp.status_code}, Content-Type: {content_type})" +
+                           (f"，重定向到: {location}" if location else "") +
+                           f"，接入点 {self.base_url} 的 API 不可用"
+                }
+                resp_code = "empty_response"
+                resp_str = json.dumps(resp_json, ensure_ascii=False)
+                status = "empty_response"
+            else:
+                resp_json = resp.json()
+                resp_code = str(resp_json.get("code", resp.status_code))
+                resp_str = json.dumps(resp_json, ensure_ascii=False)
+                status = "success" if resp_json.get("code") == "0" else "error"
+
+                if resp_code in ("50112", "50115") and _retry:
+                    self._log_call(path, method, body_str, resp_str, resp_code, "retry_syncing", req_meta)
+                    synced = self._sync_time(silent=True)
+                    if synced:
+                        return self._request(method, path, body, _retry=False)
+
+        except OSError as e:
+            err_msg = str(e)
+            if "getaddrinfo" in err_msg:
+                err_msg = f"DNS解析失败：无法连接 {self.base_url}，请检查网络或设置环境变量 OKX_BASE_URL 切换接入点"
+            resp_code = "network_error"
+            resp_str = err_msg
+            resp_json = {"code": "-1", "msg": err_msg}
+            status = "network_error"
+        except Exception as e:
+            resp_code = "exception"
+            resp_str = str(e)
+            resp_json = {"code": "-1", "msg": str(e)}
+            status = "exception"
+
+        self._log_call(path, method, body_str, resp_str, resp_code, status, req_meta)
+        return resp_json
+
+    def get_balance(self):
+        resp = self._request("GET", "/api/v5/account/balance")
+        return resp.get("data", [{}])[0] if resp.get("data") else {}
+
+    def get_positions(self):
+        resp = self._request("GET", "/api/v5/account/positions")
+        return resp.get("data", [])
+
+    def get_ticker(self, inst_id: str):
+        resp = self._request("GET", f"/api/v5/market/ticker?instId={inst_id}")
+        return resp.get("data", [])
+
+    def get_candles(self, inst_id: str, bar: str = "1m", limit: str = "100"):
+        resp = self._request("GET", f"/api/v5/market/candles?instId={inst_id}&bar={bar}&limit={limit}")
+        return resp.get("data", [])
+
+    def place_order(self, inst_id: str, side: str, ord_type: str, sz: str, px: str | None = None):
+        body: dict = {
+            "instId": inst_id,
+            "side": side,
+            "ordType": ord_type,
+            "sz": sz,
+        }
+        body.pop("tdMode", None)
+        if "-SWAP" in inst_id:
+            body["tdMode"] = "cross"
+        if px and ord_type == "limit":
+            body["px"] = px
+        import os, json as _json
+        try:
+            log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'logs')
+            os.makedirs(log_dir, exist_ok=True)
+            with open(os.path.join(log_dir, 'debug_place_order.txt'), 'a', encoding='utf-8') as _df:
+                _df.write(_json.dumps(body) + '\n')
+        except Exception:
+            pass
+        return self._request("POST", "/api/v5/trade/order", body)
+
+    def cancel_order(self, inst_id: str, order_id: str):
+        body = {"instId": inst_id, "ordId": order_id}
+        return self._request("POST", "/api/v5/trade/cancel-order", body)
+
+    def get_order(self, inst_id: str, order_id: str):
+        resp = self._request("GET", f"/api/v5/trade/order?instId={inst_id}&ordId={order_id}")
+        return resp.get("data", [])
+
+    def get_pending_orders(self, inst_id: str | None = None):
+        path = "/api/v5/trade/orders-pending"
+        if inst_id:
+            path += f"?instId={inst_id}"
+        resp = self._request("GET", path)
+        return resp.get("data", [])
+
+    def get_orders_history(self, inst_id: str, limit: str = "50"):
+        resp = self._request("GET", f"/api/v5/trade/orders-history?instId={inst_id}&limit={limit}")
+        return resp.get("data", [])

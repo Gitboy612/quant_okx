@@ -1,0 +1,30 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg-primary: #0A0A0F;
+  --color-bg-panel: #14141A;
+  --color-bg-hover: #1A1A24;
+  --color-border: #1E1E28;
+  --color-text-primary: #E8E8ED;
+  --color-text-secondary: #6B6B7B;
+  --color-accent: #00D4AA;
+  --color-profit: #00D4AA;
+  --color-loss: #FF4757;
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+}
+
+body {
+  background-color: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+}
+
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 4px rgba(0, 212, 170, 0.4); }
+  50% { box-shadow: 0 0 12px rgba(0, 212, 170, 0.8); }
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
