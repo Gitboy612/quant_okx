@@ -8,6 +8,11 @@ export interface Account {
   created_at: string
 }
 
+export interface LoginRequest {
+  username: string
+  password: string
+}
+
 export interface AssetBalance {
   ccy: string
   avail: number

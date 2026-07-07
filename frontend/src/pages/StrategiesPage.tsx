@@ -83,7 +83,7 @@ export default function StrategiesPage() {
   const handleDelete = async (id: number) => { await deleteInstance(id); loadData() }
 
   const handleCreate = async () => {
-    if (!selectedTemplateId) return
+    if (!selectedTemplateId || selectedAccountForCreate === null) return
     setCreating(true)
     try {
       await createInstance({

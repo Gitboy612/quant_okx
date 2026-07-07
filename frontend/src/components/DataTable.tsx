@@ -11,7 +11,7 @@ interface DataTableProps<T> {
   keyField: string
 }
 
-export default function DataTable<T extends Record<string, unknown>>({
+export default function DataTable<T extends object>({
   columns,
   data,
   keyField,
@@ -41,10 +41,10 @@ export default function DataTable<T extends Record<string, unknown>>({
         </thead>
         <tbody>
           {data.map((row) => (
-            <tr key={String(row[keyField])} className="border-b border-[#1E1E28]/50 hover:bg-[#1A1A24]/50 transition-colors">
+            <tr key={String((row as Record<string, unknown>)[keyField])} className="border-b border-[#1E1E28]/50 hover:bg-[#1A1A24]/50 transition-colors">
               {columns.map((col) => (
                 <td key={col.key} className={`py-3 px-4 ${col.className ?? ''}`}>
-                  {col.render ? col.render(row) : String(row[col.key] ?? '-')}
+                  {col.render ? col.render(row) : String((row as Record<string, unknown>)[col.key] ?? '-')}
                 </td>
               ))}
             </tr>
