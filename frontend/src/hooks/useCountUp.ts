@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useSpring, animated } from 'framer-motion'
+import { useSpring } from 'framer-motion'
 
 export function useCountUp(end: number, duration: number = 1.5) {
   const spring = useSpring(0, { stiffness: 80, damping: 20, duration: duration * 1000 })

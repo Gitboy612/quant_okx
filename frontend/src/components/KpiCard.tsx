@@ -7,6 +7,7 @@ interface KpiCardProps {
   suffix?: string
   accent?: 'default' | 'profit' | 'loss' | 'neutral'
   decimals?: number
+  loading?: boolean
 }
 
 const variants: Variants = {
@@ -21,7 +22,7 @@ const accentColors = {
   neutral: 'text-[#E8E8ED]',
 }
 
-export default function KpiCard({ label, value, prefix = '', suffix = '', accent = 'default', decimals = 2 }: KpiCardProps) {
+export default function KpiCard({ label, value, prefix = '', suffix = '', accent = 'default', decimals = 2, loading = false }: KpiCardProps) {
   return (
     <motion.div
       variants={variants}
@@ -29,9 +30,11 @@ export default function KpiCard({ label, value, prefix = '', suffix = '', accent
     >
       <div className="text-xs text-[#6B6B7B] mb-2 tracking-wide uppercase">{label}</div>
       <div className={`text-2xl font-bold font-mono ${accentColors[accent]}`}>
-        {prefix}
-        {value.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}
-        {suffix}
+        {loading ? (
+          <span className="text-[#6B6B7B] text-base font-normal animate-pulse">获取中...</span>
+        ) : (
+          <>{prefix}{value.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}{suffix}</>
+        )}
       </div>
     </motion.div>
   )

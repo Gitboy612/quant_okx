@@ -13,6 +13,7 @@ from routers.orders import router as orders_router
 from routers.logs import router as logs_router
 from routers.ws import router as ws_router
 from routers.settings import router as settings_router
+from routers.monitoring import router as monitoring_router
 from services.strategy_engine import strategy_engine
 
 app = FastAPI(title="QuantOKX", version="1.0.0")
@@ -33,6 +34,7 @@ app.include_router(orders_router)
 app.include_router(logs_router)
 app.include_router(ws_router)
 app.include_router(settings_router)
+app.include_router(monitoring_router)
 
 if FRONTEND_DIR.exists():
     app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="static")
@@ -44,6 +46,7 @@ def startup():
     strategy_engine.seed_templates()
 
     from models.user import User
+    from models.strategy import StrategyInstance
     from services.auth_service import hash_password
     from database import SessionLocal
 
@@ -57,5 +60,16 @@ def startup():
             )
             db.add(admin)
             db.commit()
+
+        # Mark any running/paused strategies as stopped on server restart
+        orphaned = db.query(StrategyInstance).filter(
+            StrategyInstance.status.in_(["running", "paused"])
+        ).all()
+        for inst in orphaned:
+            inst.status = "stopped"
+            inst.stopped_at = datetime.now(timezone.utc)
+        if orphaned:
+            db.commit()
+            print(f"[startup] Reset {len(orphaned)} orphaned strategy instances to stopped")
     finally:
         db.close()

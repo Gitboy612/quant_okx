@@ -26,3 +26,7 @@ export function deleteAccount(id: number) {
 export function getAccountBalance(id: number) {
   return client.get<BalanceData>(`/accounts/${id}/balance`)
 }
+
+export function getAccountBalanceCached(id: number) {
+  return client.get<BalanceData>(`/accounts/${id}/balance/cached`)
+}

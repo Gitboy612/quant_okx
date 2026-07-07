@@ -14,7 +14,7 @@ export function checkFeasibility(id: number) {
 }
 
 export function listApiCallLogs(params: { strategy_instance_id?: number; limit?: number }) {
-  return client.get<ApiCallLogItem[]>('/api-call-logs', { params })
+  return client.get<ApiCallLogItem[]>('/strategies/api-call-logs', { params })
 }
 
 export function createTemplate(data: {

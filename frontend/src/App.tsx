@@ -9,6 +9,7 @@ import OrdersPage from './pages/OrdersPage'
 import AccountsPage from './pages/AccountsPage'
 import LogsPage from './pages/LogsPage'
 import ApiLogsPage from './pages/ApiLogsPage'
+import MonitoringPage from './pages/MonitoringPage'
 import SettingsPage from './pages/SettingsPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -52,6 +53,7 @@ function AnimatedRoutes() {
           <Route path="accounts" element={<AccountsPage />} />
           <Route path="logs" element={<LogsPage />} />
           <Route path="api-logs" element={<ApiLogsPage />} />
+          <Route path="monitoring" element={<MonitoringPage />} />
           <Route path="settings" element={<SettingsPage />} />
         </Route>
       </Routes>

@@ -12,8 +12,9 @@ interface PnLChartProps {
 export default function PnLChart({ data }: PnLChartProps) {
   if (data.length === 0) {
     return (
-      <div className="flex items-center justify-center h-full text-[#6B6B7B] text-sm">
-        暂无盈亏数据
+      <div className="flex flex-col items-center justify-center h-full text-[#6B6B7B] text-sm gap-2">
+        <span>暂无盈亏数据</span>
+        <span className="text-xs text-[#6B6B7B]/60">策略启动后约2分钟开始记录盈亏</span>
       </div>
     )
   }

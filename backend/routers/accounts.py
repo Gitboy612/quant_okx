@@ -196,6 +196,40 @@ def get_balance(
         raise HTTPException(status_code=500, detail=f"获取余额失败: {str(e)}")
 
 
+@router.get("/{account_id}/balance/cached")
+def get_balance_cached(
+    account_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Return cached balance from latest PnlRecord, avoiding OKX API call."""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="账户不存在")
+
+    from models.pnl import PnlRecord
+    from sqlalchemy import or_
+    latest = db.query(PnlRecord).filter(
+        or_(PnlRecord.account_id == account_id, PnlRecord.account_id == None)
+    ).order_by(PnlRecord.recorded_at.desc()).first()
+
+    if latest:
+        return {
+            "total_equity": latest.equity or 0,
+            "unrealized_pnl": latest.unrealized_pnl or 0,
+            "realized_pnl": latest.realized_pnl or 0,
+            "cached_at": latest.recorded_at.isoformat() if latest.recorded_at else None,
+            "source": "cached",
+        }
+    return {
+        "total_equity": 0,
+        "unrealized_pnl": 0,
+        "realized_pnl": 0,
+        "cached_at": None,
+        "source": "cached",
+    }
+
+
 @router.get("/network-check")
 def check_network_connectivity(
     user: User = Depends(get_current_user),

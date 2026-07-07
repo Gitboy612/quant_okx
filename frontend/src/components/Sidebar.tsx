@@ -8,11 +8,13 @@ import {
   Zap,
   Activity,
   Settings,
+  Eye,
 } from 'lucide-react'
 
 const links = [
   { to: '/dashboard', icon: LayoutDashboard, label: '仪表盘' },
   { to: '/strategies', icon: TrendingUp, label: '策略管理' },
+  { to: '/monitoring', icon: Eye, label: '策略监测' },
   { to: '/orders', icon: FileText, label: '交易记录' },
   { to: '/accounts', icon: Wallet, label: '账户管理' },
   { to: '/api-logs', icon: Activity, label: 'API日志' },

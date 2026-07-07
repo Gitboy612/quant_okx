@@ -140,6 +140,7 @@ class StrategyEngine:
                 params=instance.params,
                 client=client,
                 db_session_factory=SessionLocal,
+                account_id=account.id,
             )
             strategy.start()
 
@@ -157,27 +158,28 @@ class StrategyEngine:
         entry = self._tasks.get(instance_id)
         if entry:
             entry[1].pause()
-            db = SessionLocal()
-            try:
-                instance = db.query(StrategyInstance).filter(StrategyInstance.id == instance_id).first()
-                if instance:
-                    instance.status = "paused"
-                    db.commit()
-            finally:
-                db.close()
+        # Always update DB status, even if task not in memory (server restart)
+        db = SessionLocal()
+        try:
+            instance = db.query(StrategyInstance).filter(StrategyInstance.id == instance_id).first()
+            if instance:
+                instance.status = "paused"
+                db.commit()
+        finally:
+            db.close()
 
     async def resume_strategy(self, instance_id: int):
         entry = self._tasks.get(instance_id)
         if entry:
             entry[1].resume()
-            db = SessionLocal()
-            try:
-                instance = db.query(StrategyInstance).filter(StrategyInstance.id == instance_id).first()
-                if instance:
-                    instance.status = "running"
-                    db.commit()
-            finally:
-                db.close()
+        db = SessionLocal()
+        try:
+            instance = db.query(StrategyInstance).filter(StrategyInstance.id == instance_id).first()
+            if instance:
+                instance.status = "running"
+                db.commit()
+        finally:
+            db.close()
 
     async def stop_strategy(self, instance_id: int):
         entry = self._tasks.get(instance_id)
@@ -185,15 +187,16 @@ class StrategyEngine:
             entry[1].stop()
             entry[0].cancel()
             del self._tasks[instance_id]
-            db = SessionLocal()
-            try:
-                instance = db.query(StrategyInstance).filter(StrategyInstance.id == instance_id).first()
-                if instance:
-                    instance.status = "stopped"
-                    instance.stopped_at = datetime.now(timezone.utc)
-                    db.commit()
-            finally:
-                db.close()
+        # Always update DB status, even if task not in memory
+        db = SessionLocal()
+        try:
+            instance = db.query(StrategyInstance).filter(StrategyInstance.id == instance_id).first()
+            if instance:
+                instance.status = "stopped"
+                instance.stopped_at = datetime.now(timezone.utc)
+                db.commit()
+        finally:
+            db.close()
 
     async def update_params(self, instance_id: int, params: dict):
         entry = self._tasks.get(instance_id)

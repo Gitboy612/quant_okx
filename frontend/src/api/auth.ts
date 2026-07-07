@@ -1,4 +1,4 @@
-import type { LoginRequest } from '../../types'
+import type { LoginRequest } from '../types'
 import client from './client'
 
 export function login(data: LoginRequest) {

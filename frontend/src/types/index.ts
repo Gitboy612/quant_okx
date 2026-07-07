@@ -140,6 +140,20 @@ export interface User {
   username: string
 }
 
+export interface LoginRequest {
+  username: string
+  password: string
+}
+
 export interface UserSettings {
   refresh_interval: string
+}
+
+export interface StrategyEvent {
+  id: number
+  strategy_instance_id: number
+  event_type: string
+  message: string
+  details: string | null
+  created_at: string
 }

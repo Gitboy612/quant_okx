@@ -20,7 +20,7 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24
 JWT_ALGORITHM = "HS256"
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "quant-okx-secret-key-change-in-production")
 
-OKX_BASE_URL = os.getenv("OKX_BASE_URL", "https://www.okx.com")
+OKX_BASE_URL = os.getenv("OKX_BASE_URL", "https://openapi.okx.com")
 
 OKX_ALT_URLS = os.getenv("OKX_ALT_URLS", "https://www.okx.cab,https://aws.okx.com").split(",")
 

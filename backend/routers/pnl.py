@@ -53,7 +53,8 @@ def get_pnl_summary(
         return {"total_realized_pnl": 0, "total_unrealized_pnl": 0, "total_pnl": 0, "latest_equity": 0}
 
     latest = records[0]
-    total_realized = sum(r.realized_pnl or 0 for r in records)
+    # realized_pnl is cumulative, use latest value, not sum
+    total_realized = latest.realized_pnl or 0
     total_unrealized = sum(r.unrealized_pnl or 0 for r in records)
 
     return {

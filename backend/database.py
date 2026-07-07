@@ -21,6 +21,8 @@ def init_db():
     from models.log import OperationLog
     from models.api_call_log import ApiCallLog
     from models.setting import UserSetting
+    from models.system_settings import SystemSetting
+    from models.strategy_event import StrategyEvent
 
     Base.metadata.create_all(bind=engine)
 

@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Plus, Play, Pause, Square, ChevronDown, Trash2, RefreshCw, FileText, X } from 'lucide-react'
+import { Plus, Play, Pause, Square, ChevronDown, Trash2, RefreshCw, FileText, X, CheckCircle, XCircle, Loader2, AlertTriangle, Search } from 'lucide-react'
+import Dropdown from '../components/Dropdown'
 import {
   listInstances,
   listTemplates,
@@ -16,9 +17,11 @@ import {
   checkFeasibility,
 } from '../api/strategies'
 import { listAccounts } from '../api/accounts'
+import { getStrategyEvents } from '../api/monitoring'
+import { formatInstId, isContractPair, INST_ID_LABEL } from '../utils/instId'
 import StatusBadge from '../components/StatusBadge'
 import Modal from '../components/Modal'
-import type { StrategyInstance, StrategyTemplate, Account, ParamSchemaField } from '../types'
+import type { StrategyInstance, StrategyTemplate, Account, ParamSchemaField, StrategyEvent } from '../types'
 
 export default function StrategiesPage() {
   const [instances, setInstances] = useState<StrategyInstance[]>([])
@@ -30,14 +33,75 @@ export default function StrategiesPage() {
   const [creating, setCreating] = useState(false)
   const [selectedTemplateId, setSelectedTemplateId] = useState<number | null>(null)
   const [customParams, setCustomParams] = useState<Record<string, unknown>>({})
+  const [toast, setToast] = useState<{ type: 'success' | 'error'; msg: string } | null>(null)
+  const [actionLoading, setActionLoading] = useState<number | null>(null)
+  const [savingParams, setSavingParams] = useState<number | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  // symbol dropdown in create modal
+  const [symbolSearch, setSymbolSearch] = useState('')
+  const [showSymbolDropdown, setShowSymbolDropdown] = useState(false)
+  const symbolDropdownRef = useRef<HTMLDivElement>(null)
+
+  // order failure alerts
+  const [instanceEvents, setInstanceEvents] = useState<Record<number, StrategyEvent[]>>({})
+  const eventPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const presetSymbols = Object.keys(INST_ID_LABEL)
+
+  const filteredSymbols = symbolSearch
+    ? presetSymbols.filter((s) =>
+        s.toLowerCase().includes(symbolSearch.toLowerCase()) ||
+        (INST_ID_LABEL[s] && INST_ID_LABEL[s].toLowerCase().includes(symbolSearch.toLowerCase()))
+      )
+    : presetSymbols
+
+  const contractSymbols = filteredSymbols.filter((s) => isContractPair(s))
+  const spotSymbols = filteredSymbols.filter((s) => !isContractPair(s))
 
   const loadData = () => {
-    listInstances().then((res) => setInstances(res.data)).catch(() => {})
-    listTemplates().then((res) => setTemplates(res.data)).catch(() => {})
-    listAccounts().then((res) => setAccounts(res.data)).catch(() => {})
+    setLoading(true)
+    Promise.all([
+      listInstances().then((res) => setInstances(res.data)).catch(() => {}),
+      listTemplates().then((res) => setTemplates(res.data)).catch(() => {}),
+      listAccounts().then((res) => setAccounts(res.data)).catch(() => {}),
+    ]).finally(() => setLoading(false))
   }
 
   useEffect(() => { loadData() }, [])
+
+  // poll events for expanded strategy
+  useEffect(() => {
+    if (eventPollRef.current) {
+      clearInterval(eventPollRef.current)
+      eventPollRef.current = null
+    }
+    if (expandedId !== null) {
+      const pollEvents = () => {
+        getStrategyEvents(expandedId, 5).then((res) => {
+          setInstanceEvents((prev) => ({ ...prev, [expandedId]: res.data.items || [] }))
+        }).catch(() => {})
+      }
+      pollEvents()
+      eventPollRef.current = setInterval(pollEvents, 15000)
+    }
+    return () => {
+      if (eventPollRef.current) clearInterval(eventPollRef.current)
+    }
+  }, [expandedId])
+
+  // close symbol dropdown on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (symbolDropdownRef.current && !symbolDropdownRef.current.contains(e.target as Node)) {
+        setShowSymbolDropdown(false)
+      }
+    }
+    if (showSymbolDropdown) {
+      document.addEventListener('mousedown', handler)
+    }
+    return () => document.removeEventListener('mousedown', handler)
+  }, [showSymbolDropdown])
 
   const activeAccounts = accounts.filter((a) => a.is_active)
 
@@ -57,33 +121,72 @@ export default function StrategiesPage() {
   const [feasibilityMsg, setFeasibilityMsg] = useState<string | null>(null)
   const [startingId, setStartingId] = useState<number | null>(null)
 
+  const showToast = (type: 'success' | 'error', msg: string) => {
+    setToast({ type, msg })
+    setTimeout(() => setToast(null), 3000)
+  }
+
   const handleStart = async (id: number) => {
-    setStartingId(id)
+    setActionLoading(id)
     setFeasibilityMsg(null)
     try {
       const feas = await checkFeasibility(id)
       if (!feas.data.ok) {
         setFeasibilityMsg(feas.data.reason)
-        setStartingId(null)
+        setActionLoading(null)
         return
       }
       setFeasibilityMsg(feas.data.reason)
       await startInstance(id)
+      showToast('success', '策略已启动')
       setFeasibilityMsg(null)
       loadData()
     } catch (err: unknown) {
       const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      showToast('error', detail || '启动失败')
       setFeasibilityMsg(detail || '启动失败')
     }
-    setStartingId(null)
+    setActionLoading(null)
   }
-  const handlePause = async (id: number) => { await pauseInstance(id); loadData() }
-  const handleResume = async (id: number) => { await resumeInstance(id); loadData() }
-  const handleStop = async (id: number) => { await stopInstance(id); loadData() }
-  const handleDelete = async (id: number) => { await deleteInstance(id); loadData() }
+  const handlePause = async (id: number) => {
+    setActionLoading(id)
+    try { await pauseInstance(id); showToast('success', '策略已暂停'); loadData() }
+    catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      showToast('error', detail || '暂停失败')
+    }
+    setActionLoading(null)
+  }
+  const handleResume = async (id: number) => {
+    setActionLoading(id)
+    try { await resumeInstance(id); showToast('success', '策略已恢复'); loadData() }
+    catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      showToast('error', detail || '恢复失败')
+    }
+    setActionLoading(null)
+  }
+  const handleStop = async (id: number) => {
+    setActionLoading(id)
+    try { await stopInstance(id); showToast('success', '策略已停止'); loadData() }
+    catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      showToast('error', detail || '停止失败')
+    }
+    setActionLoading(null)
+  }
+  const handleDelete = async (id: number) => {
+    setActionLoading(id)
+    try { await deleteInstance(id); showToast('success', '策略已删除'); loadData() }
+    catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      showToast('error', detail || '删除失败')
+    }
+    setActionLoading(null)
+  }
 
   const handleCreate = async () => {
-    if (!selectedTemplateId) return
+    if (!selectedTemplateId || !selectedAccountForCreate) return
     setCreating(true)
     try {
       await createInstance({
@@ -126,8 +229,16 @@ export default function StrategiesPage() {
   const handleParamSave = async (id: number) => {
     const inst = instances.find((i) => i.id === id)
     if (!inst) return
-    await updateInstance(id, { params: inst.params })
-    loadData()
+    setSavingParams(id)
+    try {
+      await updateInstance(id, { params: inst.params })
+      showToast('success', '参数已保存')
+      loadData()
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      showToast('error', detail || '保存失败')
+    }
+    setSavingParams(null)
   }
 
   const getInstanceSchema = (inst: StrategyInstance) => {
@@ -138,7 +249,7 @@ export default function StrategiesPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-medium text-[#E8E8ED]">策略管理</h2>
+        <h2 className="text-sm font-medium text-[#E8E8ED]">策略列表</h2>
         <div className="flex items-center gap-2">
           <button
             onClick={() => setShowNewTemplate(true)}
@@ -155,6 +266,24 @@ export default function StrategiesPage() {
         </div>
       </div>
 
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className={`flex items-center gap-2 text-sm p-3 rounded-md border ${
+              toast.type === 'success'
+                ? 'bg-[#00D4AA]/10 text-[#00D4AA] border-[#00D4AA]/20'
+                : 'bg-[#FF4757]/10 text-[#FF4757] border-[#FF4757]/20'
+            }`}
+          >
+            {toast.type === 'success' ? <CheckCircle className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
+            {toast.msg}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-2">
         {feasibilityMsg && (
           <motion.div
@@ -170,7 +299,17 @@ export default function StrategiesPage() {
             <button onClick={() => setFeasibilityMsg(null)} className="ml-3 underline">关闭</button>
           </motion.div>
         )}
-        {instances.length === 0 ? (
+        {loading ? (
+          <div className="space-y-2">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="bg-[#14141A] rounded-lg border border-[#1E1E28] p-6 animate-pulse">
+                <div className="h-4 bg-[#1E1E28] rounded w-1/3 mb-3" />
+                <div className="h-3 bg-[#1E1E28] rounded w-1/4 mb-2" />
+                <div className="h-3 bg-[#1E1E28] rounded w-2/3" />
+              </div>
+            ))}
+          </div>
+        ) : instances.length === 0 ? (
           <div className="bg-[#14141A] rounded-lg border border-[#1E1E28] p-12 text-center text-[#6B6B7B] text-sm">
             暂无策略实例，点击上方按钮创建
           </div>
@@ -198,28 +337,34 @@ export default function StrategiesPage() {
                       <StatusBadge status={inst.status} />
                     </div>
                     <div className="text-xs text-[#6B6B7B] mt-0.5">
-                      {inst.template_name} · {inst.symbol} · {inst.market_type === 'swap' ? '永续合约' : inst.market_type === 'spot' ? '现货' : inst.market_type}
+                      {inst.template_name} · {formatInstId(inst.symbol)} · {inst.market_type === 'swap' ? '永续合约' : inst.market_type === 'spot' ? '现货' : inst.market_type}
                     </div>
                   </div>
                   <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                    {inst.status === 'stopped' || inst.status === 'paused' ? (
-                      <button onClick={() => inst.status === 'paused' ? handleResume(inst.id) : handleStart(inst.id)} className="p-1.5 rounded-md hover:bg-[#00D4AA]/10 text-[#00D4AA] transition-colors" title="启动">
-                        <Play className="w-4 h-4" />
-                      </button>
-                    ) : null}
-                    {inst.status === 'running' && (
-                      <button onClick={() => handlePause(inst.id)} className="p-1.5 rounded-md hover:bg-[#F0A500]/10 text-[#F0A500] transition-colors" title="暂停">
-                        <Pause className="w-4 h-4" />
-                      </button>
+                    {actionLoading === inst.id ? (
+                      <span className="p-1.5"><Loader2 className="w-4 h-4 animate-spin text-[#6B6B7B]" /></span>
+                    ) : (
+                      <>
+                        {inst.status === 'stopped' || inst.status === 'paused' ? (
+                          <button onClick={() => inst.status === 'paused' ? handleResume(inst.id) : handleStart(inst.id)} className="p-1.5 rounded-md hover:bg-[#00D4AA]/10 text-[#00D4AA] transition-colors" title="启动">
+                            <Play className="w-4 h-4" />
+                          </button>
+                        ) : null}
+                        {inst.status === 'running' && (
+                          <button onClick={() => handlePause(inst.id)} className="p-1.5 rounded-md hover:bg-[#F0A500]/10 text-[#F0A500] transition-colors" title="暂停">
+                            <Pause className="w-4 h-4" />
+                          </button>
+                        )}
+                        {(inst.status === 'running' || inst.status === 'paused') && (
+                          <button onClick={() => handleStop(inst.id)} className="p-1.5 rounded-md hover:bg-[#FF4757]/10 text-[#FF4757] transition-colors" title="停止">
+                            <Square className="w-4 h-4" />
+                          </button>
+                        )}
+                        <button onClick={() => handleDelete(inst.id)} className="p-1.5 rounded-md hover:bg-[#FF4757]/10 text-[#6B6B7B] hover:text-[#FF4757] transition-colors" title="删除">
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </>
                     )}
-                    {(inst.status === 'running' || inst.status === 'paused') && (
-                      <button onClick={() => handleStop(inst.id)} className="p-1.5 rounded-md hover:bg-[#FF4757]/10 text-[#FF4757] transition-colors" title="停止">
-                        <Square className="w-4 h-4" />
-                      </button>
-                    )}
-                    <button onClick={() => handleDelete(inst.id)} className="p-1.5 rounded-md hover:bg-[#FF4757]/10 text-[#6B6B7B] hover:text-[#FF4757] transition-colors" title="删除">
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
                   </div>
                 </div>
 
@@ -233,6 +378,30 @@ export default function StrategiesPage() {
                       className="overflow-hidden"
                     >
                       <div className="px-4 pb-4 border-t border-[#1E1E28] pt-4">
+                        {/* order failure alert */}
+                        {(() => {
+                          const events = instanceEvents[inst.id]
+                          const failedEvents = events?.filter((e) => e.event_type === 'order_failed')
+                          if (failedEvents && failedEvents.length > 0) {
+                            return (
+                              <motion.div
+                                initial={{ opacity: 0, y: -5 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                className="mb-3 flex items-center gap-2 bg-[#FF4757]/10 border border-[#FF4757]/20 rounded-md px-3 py-2 text-xs text-[#FF4757]"
+                              >
+                                <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                                <div className="flex-1 min-w-0">
+                                  <span className="font-medium">策略下单失败</span>
+                                  <span className="ml-2 text-[#FF4757]/70">{failedEvents[0].message}</span>
+                                  {failedEvents.length > 1 && (
+                                    <span className="ml-1 text-[#FF4757]/50">等 {failedEvents.length} 条</span>
+                                  )}
+                                </div>
+                              </motion.div>
+                            )
+                          }
+                          return null
+                        })()}
                         <div className="text-xs text-[#6B6B7B] mb-3 uppercase tracking-wide">策略参数</div>
                         <div className="grid grid-cols-2 gap-3">
                           {Object.entries(inst.params).map(([key, value]) => {
@@ -246,10 +415,10 @@ export default function StrategiesPage() {
                                   {hint ? <span className="ml-1 opacity-50">({hint})</span> : null}
                                 </label>
                                 {field?.type === 'select' && field.options ? (
-                                  <select
+                                  <Dropdown
+                                    options={field.options.map((opt: string) => ({ value: opt, label: opt }))}
                                     value={String(value)}
-                                    onChange={(e) => {
-                                      const v = e.target.value
+                                    onChange={(v) => {
                                       setInstances((prev) =>
                                         prev.map((pi) =>
                                           pi.id === inst.id
@@ -258,12 +427,8 @@ export default function StrategiesPage() {
                                         ),
                                       )
                                     }}
-                                    className="w-full bg-[#0C0C14] border border-[#1E1E28] rounded-md px-3 py-1.5 text-sm text-[#E8E8ED] focus:outline-none focus:border-[#00D4AA] mt-1 font-mono"
-                                  >
-                                    {field.options.map((opt) => (
-                                      <option key={opt} value={opt}>{opt}</option>
-                                    ))}
-                                  </select>
+                                    className="mt-1 w-full"
+                                  />
                                 ) : (
                                   <input
                                     type={field?.type === 'number' ? 'number' : 'text'}
@@ -291,9 +456,14 @@ export default function StrategiesPage() {
                         <div className="mt-4 flex gap-2">
                           <button
                             onClick={() => handleParamSave(inst.id)}
-                            className="flex items-center gap-2 bg-[#00D4AA] text-[#0A0A0F] rounded-md px-4 py-1.5 text-xs font-semibold hover:bg-[#00D4AA]/90 transition-colors"
+                            disabled={savingParams === inst.id}
+                            className="flex items-center gap-2 bg-[#00D4AA] text-[#0A0A0F] rounded-md px-4 py-1.5 text-xs font-semibold hover:bg-[#00D4AA]/90 disabled:opacity-50 transition-colors"
                           >
-                            <RefreshCw className="w-3 h-3" /> 保存参数
+                            {savingParams === inst.id ? (
+                              <><Loader2 className="w-3 h-3 animate-spin" /> 保存中...</>
+                            ) : (
+                              <><RefreshCw className="w-3 h-3" /> 保存参数</>
+                            )}
                           </button>
                         </div>
                       </div>
@@ -313,17 +483,12 @@ export default function StrategiesPage() {
           <div className="space-y-4">
             <div>
               <label className="text-xs text-[#6B6B7B]">策略模板</label>
-              <select
+              <Dropdown
+                options={templates.map((t) => ({ value: t.id, label: `${t.name} ${t.is_custom ? '(自定义)' : ''}` }))}
                 value={selectedTemplateId ?? ''}
-                onChange={(e) => setSelectedTemplateId(Number(e.target.value))}
-                className="w-full bg-[#0C0C14] border border-[#1E1E28] rounded-md px-3 py-2 text-sm text-[#E8E8ED] mt-1 focus:outline-none focus:border-[#00D4AA]"
-              >
-                {templates.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name} {t.is_custom ? '(自定义)' : ''}
-                  </option>
-                ))}
-              </select>
+                onChange={(v) => setSelectedTemplateId(Number(v))}
+                className="mt-1 w-full"
+              />
               {selectedTemplate?.description && (
                 <p className="text-xs text-[#6B6B7B] mt-1 leading-relaxed">{selectedTemplate.description}</p>
               )}
@@ -331,15 +496,12 @@ export default function StrategiesPage() {
 
             <div>
               <label className="text-xs text-[#6B6B7B]">绑定账户</label>
-              <select
+              <Dropdown
+                options={activeAccounts.map((a) => ({ value: a.id, label: `${a.name} (${a.trade_mode === 'live' ? '真实' : '模拟'})` }))}
                 value={selectedAccountForCreate ?? ''}
-                onChange={(e) => setSelectedAccountForCreate(Number(e.target.value))}
-                className="w-full bg-[#0C0C14] border border-[#1E1E28] rounded-md px-3 py-2 text-sm text-[#E8E8ED] mt-1 focus:outline-none focus:border-[#00D4AA]"
-              >
-                {activeAccounts.map((a) => (
-                  <option key={a.id} value={a.id}>{a.name} ({a.trade_mode === 'live' ? '真实' : '模拟'})</option>
-                ))}
-              </select>
+                onChange={(v) => setSelectedAccountForCreate(Number(v))}
+                className="mt-1 w-full"
+              />
             </div>
 
             <div>
@@ -354,14 +516,79 @@ export default function StrategiesPage() {
 
             <div>
               <label className="text-xs text-[#6B6B7B]">市场类型</label>
-              <select
+              <Dropdown
+                options={[{ value: 'spot', label: '现货' }, { value: 'swap', label: '永续合约' }]}
                 value={selectedMarketType}
-                onChange={(e) => setSelectedMarketType(e.target.value)}
-                className="w-full bg-[#0C0C14] border border-[#1E1E28] rounded-md px-3 py-2 text-sm text-[#E8E8ED] mt-1 focus:outline-none focus:border-[#00D4AA]"
-              >
-                <option value="spot">现货</option>
-                <option value="swap">永续合约</option>
-              </select>
+                onChange={(v) => setSelectedMarketType(String(v))}
+                className="mt-1 w-full"
+              />
+            </div>
+
+            <div>
+              <label className="text-xs text-[#6B6B7B]">交易对</label>
+              <div className="relative" ref={symbolDropdownRef}>
+                <div className="relative">
+                  <input
+                    value={symbolSearch}
+                    onChange={(e) => {
+                      setSymbolSearch(e.target.value)
+                      setCustomParams((prev) => ({ ...prev, symbol: e.target.value }))
+                      setShowSymbolDropdown(true)
+                    }}
+                    onFocus={() => setShowSymbolDropdown(true)}
+                    placeholder="搜索或输入交易对，如 BTC-USDT-SWAP"
+                    className="w-full bg-[#0C0C14] border border-[#1E1E28] rounded-md px-3 py-2 text-sm text-[#E8E8ED] mt-1 focus:outline-none focus:border-[#00D4AA] font-mono"
+                  />
+                  <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#6B6B7B]" />
+                </div>
+                {showSymbolDropdown && (
+                  <div className="absolute z-10 mt-1 w-full bg-[#14141A] border border-[#1E1E28] rounded-md shadow-lg max-h-60 overflow-y-auto">
+                    {contractSymbols.length > 0 && (
+                      <>
+                        <div className="text-[10px] text-[#F0A500] px-3 py-1.5 border-b border-[#1E1E28]/50">合约</div>
+                        {contractSymbols.map((s) => (
+                          <button
+                            key={s}
+                            type="button"
+                            onClick={() => {
+                              setSymbolSearch(s)
+                              setCustomParams((prev) => ({ ...prev, symbol: s }))
+                              setShowSymbolDropdown(false)
+                            }}
+                            className="w-full text-left px-3 py-1.5 text-xs text-[#E8E8ED] hover:bg-[#1A1A24] font-mono flex items-center gap-2"
+                          >
+                            <span className="text-[#F0A500] text-[10px] font-medium">合约</span>
+                            {INST_ID_LABEL[s] || s}
+                          </button>
+                        ))}
+                      </>
+                    )}
+                    {spotSymbols.length > 0 && (
+                      <>
+                        <div className="text-[10px] text-[#00D4AA] px-3 py-1.5 border-b border-[#1E1E28]/50">现货</div>
+                        {spotSymbols.map((s) => (
+                          <button
+                            key={s}
+                            type="button"
+                            onClick={() => {
+                              setSymbolSearch(s)
+                              setCustomParams((prev) => ({ ...prev, symbol: s }))
+                              setShowSymbolDropdown(false)
+                            }}
+                            className="w-full text-left px-3 py-1.5 text-xs text-[#E8E8ED] hover:bg-[#1A1A24] font-mono flex items-center gap-2"
+                          >
+                            <span className="text-[#00D4AA] text-[10px] font-medium">现货</span>
+                            {INST_ID_LABEL[s] || s}
+                          </button>
+                        ))}
+                      </>
+                    )}
+                    {filteredSymbols.length === 0 && (
+                      <div className="text-xs text-[#6B6B7B] px-3 py-3 text-center">无匹配交易对</div>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
 
             <div className="border-t border-[#1E1E28] pt-3">
@@ -376,18 +603,14 @@ export default function StrategiesPage() {
                       <span className="text-xs text-[#6B6B7B]/50 ml-1">({field.hint})</span>
                     )}
                     {field.type === 'select' && field.options ? (
-                      <select
+                      <Dropdown
+                        options={field.options.map((opt: string) => ({ value: opt, label: opt }))}
                         value={String(customParams[key] ?? field.default)}
-                        onChange={(e) => {
-                          const v = e.target.value
+                        onChange={(v) => {
                           setCustomParams((prev) => ({ ...prev, [key]: isNaN(Number(v)) ? v : Number(v) }))
                         }}
-                        className="w-full bg-[#0C0C14] border border-[#1E1E28] rounded-md px-3 py-1.5 text-sm text-[#E8E8ED] mt-1 focus:outline-none focus:border-[#00D4AA] font-mono"
-                      >
-                        {field.options.map((opt) => (
-                          <option key={opt} value={opt}>{opt}</option>
-                        ))}
-                      </select>
+                        className="mt-1 w-full"
+                      />
                     ) : (
                       <input
                         type={field.type === 'number' ? 'number' : 'text'}
@@ -553,15 +776,12 @@ function NewTemplateModal({
                   </div>
                   <div>
                     <label className="text-[10px] text-[#6B6B7B]">类型</label>
-                    <select
+                    <Dropdown
+                      options={[{ value: 'number', label: '数字' }, { value: 'string', label: '文本' }, { value: 'select', label: '下拉' }]}
                       value={f.type}
-                      onChange={(e) => updateField(idx, 'type', e.target.value)}
-                      className="w-full bg-[#14141A] border border-[#1E1E28] rounded-md px-2 py-1 text-xs text-[#E8E8ED] mt-0.5 focus:outline-none focus:border-[#00D4AA]"
-                    >
-                      <option value="number">数字</option>
-                      <option value="string">文本</option>
-                      <option value="select">下拉</option>
-                    </select>
+                      onChange={(v) => updateField(idx, 'type', String(v))}
+                      className="mt-0.5 w-full"
+                    />
                   </div>
                   <div>
                     <label className="text-[10px] text-[#6B6B7B]">默认值</label>

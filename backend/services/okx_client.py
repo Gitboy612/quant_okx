@@ -8,14 +8,17 @@ import httpx
 import os
 from database import SessionLocal
 from services.encryption_service import decrypt
+from services.okx_error_codes import get_error_message
 from config import OKX_BASE_URL, OKX_DNS_OVERRIDE
 
 
 class OKXClient:
     _time_offset_ms: float = 0.0
+    _global_proxy: str | None = None
 
     def __init__(self, api_key_encrypted: str, secret_encrypted: str, passphrase_encrypted: str | None,
-                 trade_mode: str = "demo", strategy_instance_id: int | None = None, account_name: str | None = None):
+                 trade_mode: str = "demo", strategy_instance_id: int | None = None, account_name: str | None = None,
+                 proxy: str | None = None):
         self.api_key = decrypt(api_key_encrypted)
         self.secret_key = decrypt(secret_encrypted)
         self.passphrase = decrypt(passphrase_encrypted) if passphrase_encrypted else ""
@@ -24,14 +27,20 @@ class OKXClient:
         self.strategy_instance_id = strategy_instance_id
         self.account_name = account_name
         self._dns_map = self._build_dns_map()
-        proxy_url = os.getenv("OKX_PROXY", "")
+
+        effective_proxy = proxy or OKXClient._global_proxy or os.getenv("OKX_PROXY", "") or None
         self._client = httpx.Client(
             timeout=15,
             follow_redirects=True,
-            proxy=proxy_url if proxy_url else None,
+            proxy=effective_proxy,
             transport=self._make_transport(),
         )
         self._sync_time()
+
+    @classmethod
+    def set_global_proxy(cls, proxy_url: str | None):
+        """Set proxy for all future OKXClient instances."""
+        cls._global_proxy = proxy_url
 
     def _build_dns_map(self) -> dict[str, str]:
         mapping: dict[str, str] = {}
@@ -192,6 +201,11 @@ class OKXClient:
                 resp_str = json.dumps(resp_json, ensure_ascii=False)
                 status = "success" if resp_json.get("code") == "0" else "error"
 
+                if status == "error":
+                    err_msg = get_error_message(resp_code)
+                    resp_json["_error_desc"] = err_msg
+                    resp_str = json.dumps(resp_json, ensure_ascii=False)
+
                 if resp_code in ("50112", "50115") and _retry:
                     self._log_call(path, method, body_str, resp_str, resp_code, "retry_syncing", req_meta)
                     synced = self._sync_time(silent=True)
@@ -237,7 +251,7 @@ class OKXClient:
             "side": side,
             "ordType": ord_type,
             "sz": sz,
-            "tdMode": "cross" if "-SWAP" in inst_id else "cash",
+            "tdMode": "cross",
         }
         if px and ord_type == "limit":
             body["px"] = px
@@ -256,7 +270,7 @@ class OKXClient:
                 "side": o["side"],
                 "ordType": o.get("ordType", "limit"),
                 "sz": o["sz"],
-                "tdMode": "cross" if "-SWAP" in o["instId"] else "cash",
+                "tdMode": "cross",
             }
             if "px" in o:
                 item["px"] = o["px"]

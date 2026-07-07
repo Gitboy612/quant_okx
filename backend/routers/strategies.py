@@ -313,23 +313,25 @@ def list_api_call_logs(
 
 @router.get("/api-call-logs/files")
 def list_api_log_files(
+    category: str = Query("all"),
     user: User = Depends(get_current_user),
 ):
     from services.log_service import list_log_files as get_files
-    return get_files()
+    return get_files(category)
 
 
 @router.get("/api-call-logs/files/{filename}")
 def read_api_log_file(
     filename: str,
     lines: int = Query(200, ge=1, le=2000),
+    category: str = Query("all"),
     user: User = Depends(get_current_user),
 ):
     from services.log_service import read_log_file
-    content = read_log_file(filename, tail_lines=lines)
+    content = read_log_file(filename, category=category, tail_lines=lines)
     if not content:
         raise HTTPException(status_code=404, detail="日志文件不存在")
-    return {"filename": filename, "lines": lines, "content": content}
+    return {"filename": filename, "category": category, "lines": lines, "content": content}
 
 
 @router.post("/instances/{instance_id}/pause")
