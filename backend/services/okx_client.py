@@ -23,6 +23,7 @@ from services.okx.funding import FundingAPI
 class OKXClient:
     _time_offset_ms: float = 0.0
     _global_proxy: str | None = None
+    _synced: bool = False
 
     def __init__(self, api_key_encrypted: str, secret_encrypted: str, passphrase_encrypted: str | None,
                  trade_mode: str = "demo", strategy_instance_id: int | None = None, account_name: str | None = None,
@@ -43,7 +44,10 @@ class OKXClient:
             proxy=effective_proxy,
             transport=self._make_transport(),
         )
-        self._sync_time()
+        # 仅在进程内首次创建时同步，且静默（异步客户端会记录日志）
+        if not OKXClient._synced:
+            self._sync_time(silent=True)
+            OKXClient._synced = True
 
         self._async_client = OKXBaseClient(
             api_key=self.api_key,

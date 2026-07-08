@@ -41,22 +41,22 @@ interface Star {
   brightness: number
 }
 
-/* ---------- Token Config (14 tokens) ---------- */
-const TOKEN_CONFIG = [
-  { symbol: 'BTC', name: 'Bitcoin', color: '#F7931A', imgSrc: new URL('../assets/btc.png', import.meta.url).href, price: '$67,842', change24h: '+2.34%', changePositive: true, marketCap: '$1.33T' },
-  { symbol: 'ETH', name: 'Ethereum', color: '#627EEA', imgSrc: new URL('../assets/eth.png', import.meta.url).href, price: '$3,891', change24h: '+1.87%', changePositive: true, marketCap: '$468B' },
-  { symbol: 'AVAX', name: 'Avalanche', color: '#E84142', imgSrc: new URL('../assets/avax.jpg', import.meta.url).href, price: '$38.52', change24h: '+3.21%', changePositive: true, marketCap: '$14.2B' },
-  { symbol: 'LINK', name: 'Chainlink', color: '#2A5ADA', imgSrc: new URL('../assets/link.png', import.meta.url).href, price: '$14.87', change24h: '-0.45%', changePositive: false, marketCap: '$8.7B' },
-  { symbol: 'SOL', name: 'Solana', color: '#00FFA3', imgSrc: new URL('../assets/sol.png', import.meta.url).href, price: '$172.30', change24h: '+4.12%', changePositive: true, marketCap: '$79B' },
-  { symbol: 'HYPE', name: 'Hyperliquid', color: '#FF3E6C', imgSrc: new URL('../assets/hype.jpg', import.meta.url).href, price: '$28.40', change24h: '+5.67%', changePositive: true, marketCap: '$9.1B' },
-  { symbol: 'OKB', name: 'OKB', color: '#00D4AA', imgSrc: new URL('../assets/okb.jpg', import.meta.url).href, price: '$52.18', change24h: '+1.03%', changePositive: true, marketCap: '$3.2B' },
-  { symbol: 'BNB', name: 'BNB', color: '#F3BA2F', imgSrc: new URL('../assets/bnb.png', import.meta.url).href, price: '$612.50', change24h: '-0.82%', changePositive: false, marketCap: '$94B' },
-  { symbol: 'ADA', name: 'Cardano', color: '#0033AD', imgSrc: new URL('../assets/ada.png', import.meta.url).href, price: '$0.45', change24h: '+1.20%', changePositive: true, marketCap: '$16.2B' },
-  { symbol: 'DOGE', name: 'Dogecoin', color: '#C2A633', imgSrc: new URL('../assets/doge.png', import.meta.url).href, price: '$0.163', change24h: '+2.85%', changePositive: true, marketCap: '$23.5B' },
-  { symbol: 'TRX', name: 'TRON', color: '#FF0013', imgSrc: new URL('../assets/trx.png', import.meta.url).href, price: '$0.0782', change24h: '-0.34%', changePositive: false, marketCap: '$8.7B' },
-  { symbol: 'USDT', name: 'Tether', color: '#26A17B', imgSrc: new URL('../assets/usdt.png', import.meta.url).href, price: '$1.00', change24h: '+0.01%', changePositive: true, marketCap: '$144B' },
-  { symbol: 'XRP', name: 'Ripple', color: '#00AAE4', imgSrc: new URL('../assets/xrp.png', import.meta.url).href, price: '$0.523', change24h: '+0.78%', changePositive: true, marketCap: '$28.9B' },
-  { symbol: 'XLM', name: 'Stellar', color: '#14B6E7', imgSrc: new URL('../assets/xlm.jpg', import.meta.url).href, price: '$0.112', change24h: '-0.56%', changePositive: false, marketCap: '$3.2B' },
+/* ---------- Token Meta (14 tokens, price data via API) ---------- */
+const TOKEN_META = [
+  { symbol: 'BTC', name: 'Bitcoin', color: '#F7931A', imgSrc: new URL('../assets/btc.png', import.meta.url).href, marketCap: '$1.33T' },
+  { symbol: 'ETH', name: 'Ethereum', color: '#627EEA', imgSrc: new URL('../assets/eth.png', import.meta.url).href, marketCap: '$468B' },
+  { symbol: 'AVAX', name: 'Avalanche', color: '#E84142', imgSrc: new URL('../assets/avax.jpg', import.meta.url).href, marketCap: '$14.2B' },
+  { symbol: 'LINK', name: 'Chainlink', color: '#2A5ADA', imgSrc: new URL('../assets/link.png', import.meta.url).href, marketCap: '$8.7B' },
+  { symbol: 'SOL', name: 'Solana', color: '#00FFA3', imgSrc: new URL('../assets/sol.png', import.meta.url).href, marketCap: '$79B' },
+  { symbol: 'HYPE', name: 'Hyperliquid', color: '#FF3E6C', imgSrc: new URL('../assets/hype.jpg', import.meta.url).href, marketCap: '$9.1B' },
+  { symbol: 'OKB', name: 'OKB', color: '#00D4AA', imgSrc: new URL('../assets/okb.jpg', import.meta.url).href, marketCap: '$3.2B' },
+  { symbol: 'BNB', name: 'BNB', color: '#F3BA2F', imgSrc: new URL('../assets/bnb.png', import.meta.url).href, marketCap: '$94B' },
+  { symbol: 'ADA', name: 'Cardano', color: '#0033AD', imgSrc: new URL('../assets/ada.png', import.meta.url).href, marketCap: '$16.2B' },
+  { symbol: 'DOGE', name: 'Dogecoin', color: '#C2A633', imgSrc: new URL('../assets/doge.png', import.meta.url).href, marketCap: '$23.5B' },
+  { symbol: 'TRX', name: 'TRON', color: '#FF0013', imgSrc: new URL('../assets/trx.png', import.meta.url).href, marketCap: '$8.7B' },
+  { symbol: 'USDT', name: 'Tether', color: '#26A17B', imgSrc: new URL('../assets/usdt.png', import.meta.url).href, marketCap: '$144B' },
+  { symbol: 'XRP', name: 'Ripple', color: '#00AAE4', imgSrc: new URL('../assets/xrp.png', import.meta.url).href, marketCap: '$28.9B' },
+  { symbol: 'XLM', name: 'Stellar', color: '#14B6E7', imgSrc: new URL('../assets/xlm.jpg', import.meta.url).href, marketCap: '$3.2B' },
 ]
 
 const DOT_COUNT = 25
@@ -67,7 +67,7 @@ const RESTING_OPACITY = 0.28
 
 /* ---------- Preload images ---------- */
 const preloadedImages: Record<string, HTMLImageElement> = {}
-TOKEN_CONFIG.forEach((t) => {
+TOKEN_META.forEach((t) => {
   const img = new Image()
   img.src = t.imgSrc
   preloadedImages[t.symbol] = img
@@ -113,6 +113,37 @@ function initStars(w: number, h: number): Star[] {
   return stars
 }
 
+/* ---------- Price utilities ---------- */
+interface PriceSnapshot {
+  price: string
+  change24h: string
+  changePositive: boolean
+}
+
+const PRICE_CACHE_KEY = 'okx_bg_prices_v1'
+
+function loadPriceCache(): Record<string, PriceSnapshot> | null {
+  try {
+    const raw = localStorage.getItem(PRICE_CACHE_KEY)
+    if (raw) return JSON.parse(raw)
+  } catch { /* ignore */ }
+  return null
+}
+
+function savePriceCache(data: Record<string, PriceSnapshot>) {
+  try {
+    localStorage.setItem(PRICE_CACHE_KEY, JSON.stringify(data))
+  } catch { /* ignore */ }
+}
+
+function formatPrice(price: number): string {
+  if (price >= 10000) return '$' + Math.round(price).toLocaleString('en-US')
+  if (price >= 1) return '$' + price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  if (price >= 0.1) return '$' + price.toFixed(3)
+  if (price >= 0.01) return '$' + price.toFixed(4)
+  return '$' + price.toFixed(6)
+}
+
 export default function BlockchainBackground() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const tokensRef = useRef<TokenNode[]>([])
@@ -132,11 +163,29 @@ export default function BlockchainBackground() {
   }>({ active: false, token: null, offsetX: 0, offsetY: 0, startX: 0, startY: 0 })
 
   const initNodes = useCallback((w: number, h: number) => {
-    tokensRef.current = TOKEN_CONFIG.map((t, i) => {
-      const angle = (Math.PI * 2 / TOKEN_CONFIG.length) * i + (i * 0.3)
+    const cachedPrices = loadPriceCache()
+    tokensRef.current = TOKEN_META.map((t, i) => {
+      const angle = (Math.PI * 2 / TOKEN_META.length) * i + (i * 0.3)
       const dist = Math.min(w, h) * 0.24 + Math.random() * Math.min(w, h) * 0.16
+      let price = '---'
+      let change24h = '---'
+      let changePositive = true
+      if (t.symbol === 'USDT') {
+        price = '$1.00'
+        change24h = '+0.00%'
+      } else if (cachedPrices && cachedPrices[t.symbol]) {
+        price = cachedPrices[t.symbol].price
+        change24h = cachedPrices[t.symbol].change24h
+        changePositive = cachedPrices[t.symbol].changePositive
+      }
       return {
-        ...t,
+        symbol: t.symbol,
+        name: t.name,
+        color: t.color,
+        marketCap: t.marketCap,
+        price,
+        change24h,
+        changePositive,
         x: w / 2 + Math.cos(angle) * dist,
         y: h / 2 + Math.sin(angle) * dist,
         vx: (Math.random() - 0.5) * 0.1,
@@ -522,6 +571,56 @@ export default function BlockchainBackground() {
       tooltip.remove()
     }
   }, [initNodes])
+
+  /* ---------- Fetch live prices ---------- */
+  useEffect(() => {
+    let active = true
+
+    const fetchPrices = async () => {
+      const tokens = tokensRef.current
+      if (tokens.length === 0) return
+
+      const fetchable = TOKEN_META.filter(t => t.symbol !== 'USDT').map(t => t.symbol)
+      if (fetchable.length === 0) return
+      const symbolsParam = fetchable.join(',')
+
+      try {
+        const resp = await fetch(`/api/market/spot-tickers?symbols=${encodeURIComponent(symbolsParam)}`)
+        const data = await resp.json()
+        if (data.code !== '0' || !data.data) return
+
+        const snapshot: Record<string, PriceSnapshot> = {}
+        tokens.forEach((token) => {
+          const ticker = data.data[token.symbol]
+          if (ticker && ticker.last) {
+            const priceNum = parseFloat(ticker.last)
+            if (!isNaN(priceNum) && priceNum > 0) {
+              token.price = formatPrice(priceNum)
+              token.change24h = ticker.change24h || '0.00%'
+              token.changePositive = !token.change24h.startsWith('-')
+              snapshot[token.symbol] = {
+                price: token.price,
+                change24h: token.change24h,
+                changePositive: token.changePositive,
+              }
+            }
+          }
+        })
+        if (active && Object.keys(snapshot).length > 0) {
+          savePriceCache(snapshot)
+        }
+      } catch {
+        /* keep showing cached data */
+      }
+    }
+
+    fetchPrices()
+    const interval = setInterval(fetchPrices, 20000)
+    return () => {
+      active = false
+      clearInterval(interval)
+    }
+  }, [])
 
   return (
     <canvas

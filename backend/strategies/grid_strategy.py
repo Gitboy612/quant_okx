@@ -45,15 +45,23 @@ class GridStrategy(BaseStrategy):
 
             sell_price = round(round((self._grid_levels[grid_idx] + self._grid_step) / self._grid_tick_size) * self._grid_tick_size, self._grid_tick_decimals)
             sell_price_str = f"{sell_price:.{self._grid_tick_decimals}f}"
-            sell_resp = await self.client.place_order(
-                inst_id=symbol, side="sell", ord_type="limit",
-                sz=str(self._grid_order_qty), px=sell_price_str,
-            )
+            try:
+                sell_resp = await self.client.place_order(
+                    inst_id=symbol, side="sell", ord_type="limit",
+                    sz=str(self._grid_order_qty), px=sell_price_str,
+                )
+            except Exception as e:
+                self._record_event("order_failed",
+                                   f"买单成交后下卖单异常: grid_idx={grid_idx} px={sell_price_str} err={e}")
+                return
             if sell_resp.get("code") == "0":
                 sell_ord_id = sell_resp.get("data", [{}])[0].get("ordId", "")
                 self._active_sell_orders[grid_idx + 1] = sell_ord_id
                 self.record_order(symbol, "sell", "limit", sell_price,
                                   self._grid_order_qty, order_id=sell_ord_id, status="live")
+            else:
+                self._record_event("order_failed",
+                                   f"买单成交后下卖单失败: grid_idx={grid_idx} px={sell_price_str} code={sell_resp.get('code')} msg={sell_resp.get('msg', '')}")
 
         elif side == "sell":
             if grid_idx in self._active_sell_orders:
@@ -66,15 +74,23 @@ class GridStrategy(BaseStrategy):
 
             buy_price = round(round((self._grid_levels[grid_idx] - self._grid_step) / self._grid_tick_size) * self._grid_tick_size, self._grid_tick_decimals)
             buy_price_str = f"{buy_price:.{self._grid_tick_decimals}f}"
-            buy_resp = await self.client.place_order(
-                inst_id=symbol, side="buy", ord_type="limit",
-                sz=str(self._grid_order_qty), px=buy_price_str,
-            )
+            try:
+                buy_resp = await self.client.place_order(
+                    inst_id=symbol, side="buy", ord_type="limit",
+                    sz=str(self._grid_order_qty), px=buy_price_str,
+                )
+            except Exception as e:
+                self._record_event("order_failed",
+                                   f"卖单成交后下买单异常: grid_idx={grid_idx} px={buy_price_str} err={e}")
+                return
             if buy_resp.get("code") == "0":
                 buy_ord_id = buy_resp.get("data", [{}])[0].get("ordId", "")
                 self._active_buy_orders[grid_idx - 1] = buy_ord_id
                 self.record_order(symbol, "buy", "limit", buy_price,
                                   self._grid_order_qty, order_id=buy_ord_id, status="live")
+            else:
+                self._record_event("order_failed",
+                                   f"卖单成交后下买单失败: grid_idx={grid_idx} px={buy_price_str} code={buy_resp.get('code')} msg={buy_resp.get('msg', '')}")
 
     def _rebuild_active_dicts(self, symbol: str):
         """Rebuild active_buy_orders and active_sell_orders from OrderManager."""
@@ -261,6 +277,7 @@ class GridStrategy(BaseStrategy):
             return
 
         last_rest_check = 0.0
+        consecutive_errors = 0
 
         while self._running:
             if self._paused:
@@ -310,8 +327,49 @@ class GridStrategy(BaseStrategy):
                 total_equity = self._initial_equity + realized_pnl + unrealized_pnl
                 self.record_pnl(total_equity, unrealized_pnl, realized_pnl)
 
-            except Exception:
-                pass
+                consecutive_errors = 0
+
+            except Exception as e:
+                consecutive_errors += 1
+                error_msg = str(e)
+                # 判断是否网络异常
+                is_network_error = any(kw in error_msg.lower() for kw in [
+                    "winerror 10060", "winerror 10061", "timed out", "connection refused",
+                    "ssl", "eof", "network", "connect", "timeout", "unreachable"
+                ])
+
+                if is_network_error:
+                    backoff = min(2 ** consecutive_errors, 60)  # 指数退避，上限 60s
+                    print(f"[GridStrategy] Network error #{consecutive_errors}, backing off {backoff}s: {e}")
+                    self._record_event("error", f"网络异常 (第{consecutive_errors}次)，退避 {backoff}s: {error_msg[:200]}")
+
+                    if consecutive_errors >= 10:
+                        print(f"[GridStrategy] Too many network errors ({consecutive_errors}), stopping strategy")
+                        self._record_event("error", f"连续网络异常 {consecutive_errors} 次，自动停止策略")
+                        self.record_final_pnl()
+                        self.update_status("stopped")
+                        # 设置停止标志，退出循环
+                        self._running = False
+                        break
+
+                    await asyncio.sleep(backoff)
+                    continue
+                else:
+                    # 非网络异常，使用线性退避，避免快速循环刷日志
+                    backoff = min(3 * consecutive_errors, 30)
+                    print(f"[GridStrategy] Non-network error #{consecutive_errors}, backing off {backoff}s: {e}")
+                    self._record_event("error", f"策略异常 (第{consecutive_errors}次)，退避 {backoff}s: {error_msg[:200]}")
+
+                    if consecutive_errors >= 20:
+                        print(f"[GridStrategy] Too many non-network errors ({consecutive_errors}), stopping strategy")
+                        self._record_event("error", f"连续策略异常 {consecutive_errors} 次，自动停止策略: {error_msg[:200]}")
+                        self.record_final_pnl()
+                        self.update_status("stopped")
+                        self._running = False
+                        break
+
+                    await asyncio.sleep(backoff)
+                    continue
 
             await asyncio.sleep(3)
 

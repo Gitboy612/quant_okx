@@ -26,5 +26,6 @@ export const getSampleConfigs = () => client.get('/settings/proxy/sample-configs
 export const importSampleConfig = (path: string) => client.post('/settings/proxy/sample-configs/import', { path })
 
 export const getProxyStatus = () => client.get('/settings/proxy/status')
-export const startProxy = (data?: { config_path?: string; port?: number }) => client.post('/settings/proxy/start', data || {})
+export const startProxy = (data?: { config_path?: string; port?: number; bootstrap_proxy?: string }) => client.post('/settings/proxy/start', data || {})
 export const stopProxy = () => client.post('/settings/proxy/stop')
+export const getMmdbStatus = () => client.get('/settings/proxy/mmdb-status')

@@ -40,6 +40,7 @@ class RateLimiter:
 class OKXBaseClient:
     _time_offset_ms: float = 0.0
     _global_proxy: Optional[str] = None
+    _synced: bool = False
 
     def __init__(
         self,
@@ -79,12 +80,11 @@ class OKXBaseClient:
         self._public_limiter = RateLimiter(max_calls=20, period_seconds=2.0)
         self._private_limiter = RateLimiter(max_calls=60, period_seconds=2.0)
         self._client_lock = asyncio.Lock()
-        self._synced = False
 
     async def _ensure_synced(self):
-        if not self._synced:
+        if not OKXBaseClient._synced:
             await self._sync_time()
-            self._synced = True
+            OKXBaseClient._synced = True
 
     @classmethod
     def set_global_proxy(cls, proxy_url: Optional[str]):

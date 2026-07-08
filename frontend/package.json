@@ -10,7 +10,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@react-three/drei": "^10.7.7",
+    "@react-three/fiber": "^9.6.1",
     "@tailwindcss/vite": "^4.3.2",
+    "@types/three": "^0.185.0",
     "axios": "^1.18.1",
     "framer-motion": "^12.42.2",
     "lucide-react": "^1.23.0",
@@ -18,7 +21,8 @@
     "react-dom": "^19.2.7",
     "react-router-dom": "^7.18.1",
     "recharts": "^3.9.2",
-    "tailwindcss": "^4.3.2"
+    "tailwindcss": "^4.3.2",
+    "three": "^0.185.1"
   },
   "devDependencies": {
     "@types/node": "^24.13.2",

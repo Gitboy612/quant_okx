@@ -109,7 +109,8 @@ def start_proxy_core(
     from services.proxy_core import start_proxy
     config_path = body.get("config_path") if body else None
     port = int(body.get("port", 7890)) if body else 7890
-    result = start_proxy(config_path=config_path, port=port)
+    bootstrap_proxy = body.get("bootstrap_proxy") if body else None
+    result = start_proxy(config_path=config_path, port=port, bootstrap_proxy=bootstrap_proxy)
     return result
 
 
@@ -120,6 +121,24 @@ def stop_proxy_core(
     """Stop embedded proxy core."""
     from services.proxy_core import stop_proxy
     return stop_proxy()
+
+
+@router.get("/proxy/log")
+def get_proxy_log_route(
+    user: User = Depends(get_current_user),
+):
+    """Get mihomo log tail for diagnostics."""
+    from services.proxy_core import get_proxy_log
+    return get_proxy_log()
+
+
+@router.get("/proxy/mmdb-status")
+def get_mmdb_status_route(
+    user: User = Depends(get_current_user),
+):
+    """Get MMDB file status for diagnostics."""
+    from services.proxy_core import _check_mmdb_ready
+    return _check_mmdb_ready()
 
 
 @router.post("/proxy/config/import")

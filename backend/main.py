@@ -15,6 +15,7 @@ from routers.ws import router as ws_router
 from routers.settings import router as settings_router
 from routers.monitoring import router as monitoring_router
 from routers.market import router as market_router
+from routers.maintenance import router as maintenance_router
 from services.strategy_engine import strategy_engine
 
 app = FastAPI(title="QuantOKX", version="1.0.0")
@@ -37,6 +38,7 @@ app.include_router(ws_router)
 app.include_router(settings_router)
 app.include_router(monitoring_router)
 app.include_router(market_router)
+app.include_router(maintenance_router)
 
 if FRONTEND_DIR.exists():
     app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="static")
@@ -49,6 +51,7 @@ def startup():
 
     from models.user import User
     from models.strategy import StrategyInstance
+    from models.pnl import PnlRecord
     from services.auth_service import hash_password
     from database import SessionLocal
 
@@ -71,6 +74,23 @@ def startup():
             inst.status = "stopped"
             inst.stopped_at = datetime.now(timezone.utc)
         if orphaned:
+            db.commit()
+            # 重置状态后，为每个被重置实例写 unrealized=0 的 PnL 记录，避免仪表盘显示陈旧数据
+            for instance in orphaned:
+                latest_pnl = db.query(PnlRecord).filter(
+                    PnlRecord.strategy_instance_id == instance.id
+                ).order_by(PnlRecord.recorded_at.desc()).first()
+                if latest_pnl:
+                    new_record = PnlRecord(
+                        account_id=instance.account_id,
+                        strategy_instance_id=instance.id,
+                        equity=latest_pnl.equity,
+                        unrealized_pnl=0,
+                        realized_pnl=latest_pnl.realized_pnl,
+                        total_pnl=latest_pnl.realized_pnl,
+                        recorded_at=datetime.now(timezone.utc),
+                    )
+                    db.add(new_record)
             db.commit()
             print(f"[startup] Reset {len(orphaned)} orphaned strategy instances to stopped")
     finally:

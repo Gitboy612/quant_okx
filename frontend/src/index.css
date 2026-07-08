@@ -265,3 +265,100 @@ input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; marg
   transform: translateY(0) scale(1);
   transition: opacity 0.25s ease, transform 0.25s ease;
 }
+
+/* ===== Cinematic Opening Animation ===== */
+.cinema-beams {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.cinema-beam {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 200%;
+  height: 200%;
+  transform-origin: 0 0;
+  opacity: 0;
+}
+
+.cinema-beam-1 {
+  background: conic-gradient(
+    from 0deg at 50% 50%,
+    transparent 0deg,
+    rgba(0, 212, 170, 0.03) 2deg,
+    transparent 4deg,
+    transparent 50deg,
+    rgba(0, 212, 170, 0.025) 52deg,
+    transparent 54deg,
+    transparent 180deg,
+    rgba(58, 139, 255, 0.02) 182deg,
+    transparent 184deg,
+    transparent 360deg
+  );
+  animation: beam-sweep-1 5s ease-in-out infinite;
+}
+
+.cinema-beam-2 {
+  background: conic-gradient(
+    from 180deg at 50% 50%,
+    transparent 0deg,
+    rgba(0, 212, 170, 0.025) 3deg,
+    transparent 6deg,
+    transparent 90deg,
+    rgba(58, 139, 255, 0.02) 92deg,
+    transparent 94deg,
+    transparent 270deg,
+    rgba(0, 212, 170, 0.02) 273deg,
+    transparent 276deg,
+    transparent 360deg
+  );
+  animation: beam-sweep-2 6s ease-in-out infinite;
+}
+
+@keyframes beam-sweep-1 {
+  0% { transform: translate(-50%, -50%) rotate(-25deg); opacity: 0; }
+  15% { opacity: 0.8; }
+  50% { transform: translate(-50%, -50%) rotate(15deg); opacity: 1; }
+  85% { opacity: 0.8; }
+  100% { transform: translate(-50%, -50%) rotate(-25deg); opacity: 0; }
+}
+
+@keyframes beam-sweep-2 {
+  0% { transform: translate(-50%, -50%) rotate(20deg); opacity: 0; }
+  20% { opacity: 0.6; }
+  50% { transform: translate(-50%, -50%) rotate(-18deg); opacity: 0.8; }
+  80% { opacity: 0.6; }
+  100% { transform: translate(-50%, -50%) rotate(20deg); opacity: 0; }
+}
+
+.cinema-particles {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  background-image:
+    radial-gradient(1px 1px at 10% 20%, rgba(0,212,170,0.3) 0%, transparent 100%),
+    radial-gradient(1px 1px at 30% 60%, rgba(0,212,170,0.2) 0%, transparent 100%),
+    radial-gradient(1px 1px at 50% 30%, rgba(255,255,255,0.15) 0%, transparent 100%),
+    radial-gradient(1px 1px at 70% 70%, rgba(0,212,170,0.2) 0%, transparent 100%),
+    radial-gradient(1px 1px at 85% 40%, rgba(255,255,255,0.1) 0%, transparent 100%),
+    radial-gradient(1px 1px at 20% 80%, rgba(58,139,255,0.15) 0%, transparent 100%),
+    radial-gradient(1px 1px at 60% 15%, rgba(0,212,170,0.2) 0%, transparent 100%),
+    radial-gradient(1px 1px at 90% 85%, rgba(255,255,255,0.1) 0%, transparent 100%),
+    radial-gradient(1px 1px at 40% 45%, rgba(0,212,170,0.15) 0%, transparent 100%),
+    radial-gradient(1px 1px at 75% 55%, rgba(58,139,255,0.1) 0%, transparent 100%);
+  animation: particles-drift 8s linear infinite;
+}
+
+@keyframes particles-drift {
+  0% { transform: translateY(0); }
+  100% { transform: translateY(-20px); }
+}
+
+@keyframes cinema-glow {
+  0%, 100% { opacity: 0.3; transform: scale(1); }
+  50% { opacity: 0.7; transform: scale(1.1); }
+}

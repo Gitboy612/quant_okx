@@ -94,10 +94,12 @@ class BaseStrategy(ABC):
         except RuntimeError:
             cancelled = _asyncio.run(self.order_manager.cancel_all(symbol))
             self._record_event("paused", f"策略已暂停, 撤销 {cancelled} 笔订单")
+            self.record_final_pnl()
 
     async def _pause_async(self, symbol: str):
         cancelled = await self.order_manager.cancel_all(symbol)
         self._record_event("paused", f"策略已暂停, 撤销 {cancelled} 笔订单")
+        self.record_final_pnl()
 
     def resume(self):
         self._paused = False
@@ -114,10 +116,12 @@ class BaseStrategy(ABC):
         except RuntimeError:
             cancelled = _asyncio.run(self.order_manager.cancel_all(symbol))
             self._record_event("stopped", f"策略已停止, 撤销 {cancelled} 笔订单")
+            self.record_final_pnl()
 
     async def _stop_async(self, symbol: str):
         cancelled = await self.order_manager.cancel_all(symbol)
         self._record_event("stopped", f"策略已停止, 撤销 {cancelled} 笔订单")
+        self.record_final_pnl()
 
     def add_realized_pnl(self, pnl: float):
         """Accumulate realized PnL from a completed trade."""
@@ -247,6 +251,37 @@ class BaseStrategy(ABC):
         self._record_event("pnl_recorded",
                            f"equity={equity} unrealized={unrealized_pnl} realized={realized_pnl}",
                            {"equity": equity, "unrealized_pnl": unrealized_pnl, "realized_pnl": realized_pnl})
+
+    def record_final_pnl(self):
+        """策略停止时写一条 unrealized_pnl=0 的最终 PnL 记录。"""
+        try:
+            from models.pnl import PnlRecord
+            db = self.db_session_factory()
+            try:
+                # 读取最新 PnlRecord 保留 realized 和 equity
+                latest = db.query(PnlRecord).filter(
+                    PnlRecord.strategy_instance_id == self.instance_id
+                ).order_by(PnlRecord.recorded_at.desc()).first()
+
+                realized = latest.realized_pnl if latest else self.get_realized_pnl()
+                equity = latest.equity if latest else 0
+
+                record = PnlRecord(
+                    account_id=self.account_id,
+                    strategy_instance_id=self.instance_id,
+                    equity=equity,
+                    unrealized_pnl=0,  # 停止后清零
+                    realized_pnl=realized,
+                    total_pnl=realized,  # 0 + realized
+                    recorded_at=datetime.now(timezone.utc),
+                )
+                db.add(record)
+                db.commit()
+                self._record_event("stopped", f"策略已停止，最终 PnL: equity={equity}, realized={realized}, unrealized=0")
+            finally:
+                db.close()
+        except Exception as e:
+            print(f"[BaseStrategy] record_final_pnl error: {e}")
 
     def update_status(self, status: str):
         from models.strategy import StrategyInstance

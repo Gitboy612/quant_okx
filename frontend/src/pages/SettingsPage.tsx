@@ -1,8 +1,11 @@
 import { useEffect, useState, useRef } from 'react'
 import { motion } from 'framer-motion'
-import { Save, Upload, Wifi, CheckCircle, XCircle, Loader2, Lock, Play, Square, Server } from 'lucide-react'
-import { getSettings, saveSettings, getProxySettings, saveProxySettings, testProxy, importProxyConfig, getProxyStatus, startProxy, stopProxy, getSampleConfigs, importSampleConfig } from '../api/settings'
+import { Save, Upload, Wifi, CheckCircle, XCircle, Loader2, Lock, Play, Square, Server, Database, Trash2, RefreshCw, AlertTriangle } from 'lucide-react'
+import { getSettings, saveSettings, getProxySettings, saveProxySettings, testProxy, importProxyConfig, getProxyStatus, startProxy, stopProxy, getSampleConfigs, importSampleConfig, getMmdbStatus } from '../api/settings'
 import { changePassword } from '../api/auth'
+import { resetPnl, cleanupPnlRecords, cleanupOrderRecords, cleanupStrategyEvents, correctEquity, correctUnrealizedPnl, correctRealizedPnl } from '../api/maintenance'
+import { listInstances } from '../api/strategies'
+import { listAccounts } from '../api/accounts'
 import type { UserSettings, ProxyStatus, SampleConfig, ConnectivityResult } from '../types'
 
 interface ProxyNode {
@@ -47,11 +50,23 @@ export default function SettingsPage() {
   const [proxyStatus, setProxyStatus] = useState<ProxyStatus | null>(null)
   const [proxyPort, setProxyPort] = useState(7890)
   const [proxyLoading, setProxyLoading] = useState(false)
+  const [bootstrapProxy, setBootstrapProxy] = useState('')
+  const [mmdbStatus, setMmdbStatus] = useState<{ ready: boolean; files: Array<{ name: string; exists: boolean; size?: number; mtime?: string | null }>; missing: string[] } | null>(null)
+  const [mmdbError, setMmdbError] = useState('')
 
   // password
   const [passwordError, setPasswordError] = useState('')
   const [passwordSuccess, setPasswordSuccess] = useState('')
   const [passwordSaving, setPasswordSaving] = useState(false)
+
+  // data maintenance
+  const [maintenanceLoading, setMaintenanceLoading] = useState<string | null>(null)
+  const [maintenanceResult, setMaintenanceResult] = useState<{ op: string; ok: boolean; message: string } | null>(null)
+  const [confirmOp, setConfirmOp] = useState<string | null>(null)
+  const [strategyInstances, setStrategyInstances] = useState<Array<{ id: number; name: string; status: string }>>([])
+  const [accounts, setAccounts] = useState<Array<{ id: number; name: string }>>([])
+  const [selectedStrategyId, setSelectedStrategyId] = useState<number | null>(null)
+  const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null)
 
   useEffect(() => {
     getSettings().then((res) => setSettings(res.data)).catch(() => {})
@@ -70,6 +85,9 @@ export default function SettingsPage() {
       if (res.data.port) setProxyPort(res.data.port)
     }).catch(() => {})
     getSampleConfigs().then((res) => setSampleConfigs(res.data.samples || [])).catch(() => {})
+    getMmdbStatus().then((res) => setMmdbStatus(res.data)).catch(() => {})
+    listInstances().then((res) => setStrategyInstances(res.data || [])).catch(() => {})
+    listAccounts().then((res) => setAccounts(res.data || [])).catch(() => {})
   }, [])
 
   const handleSave = async () => {
@@ -147,11 +165,21 @@ export default function SettingsPage() {
 
   const handleStartProxy = async () => {
     setProxyLoading(true)
+    setMmdbError('')
     try {
-      const res = await startProxy({ port: proxyPort })
+      const res = await startProxy({ port: proxyPort, bootstrap_proxy: bootstrapProxy || undefined })
       setProxyStatus(res.data)
+      if (res.data?.mmdb_status) setMmdbStatus(res.data.mmdb_status)
+      getMmdbStatus().then((r) => setMmdbStatus(r.data)).catch(() => {})
     } catch (err: any) {
       const detail = err?.response?.data?.detail || err?.response?.data?.message || '启动失败'
+      const mmdb = err?.response?.data?.mmdb_status
+      if (mmdb) {
+        setMmdbStatus(mmdb)
+        setMmdbError(`MMDB 文件缺失：${mmdb.missing?.join(', ') || '未知'}。请手动放置或填写引导代理后重试。`)
+      } else {
+        setMmdbError(detail)
+      }
       setProxyStatus({ status: 'error', port: proxyPort, pid: null, started_at: null, uptime_seconds: 0 })
     }
     setProxyLoading(false)
@@ -162,6 +190,7 @@ export default function SettingsPage() {
     try {
       const res = await stopProxy()
       setProxyStatus(res.data)
+      getMmdbStatus().then((r) => setMmdbStatus(r.data)).catch(() => {})
     } catch (err: any) {
       setProxyStatus({ status: 'stopped', port: proxyPort, pid: null, started_at: null, uptime_seconds: 0 })
     }
@@ -197,6 +226,20 @@ export default function SettingsPage() {
       setPasswordError(detail || '密码修改失败')
     }
     setPasswordSaving(false)
+  }
+
+  const runMaintenance = async (op: string, fn: () => Promise<any>) => {
+    setMaintenanceLoading(op)
+    setMaintenanceResult(null)
+    try {
+      const res = await fn()
+      setMaintenanceResult({ op, ok: true, message: res.data?.message || '操作成功' })
+    } catch (err: any) {
+      const detail = err?.response?.data?.message || err?.response?.data?.detail || '操作失败'
+      setMaintenanceResult({ op, ok: false, message: detail })
+    }
+    setMaintenanceLoading(null)
+    setConfirmOp(null)
   }
 
   return (
@@ -368,6 +411,61 @@ export default function SettingsPage() {
               <p className="text-xs text-[#505C78] mt-1">mihomo mixed-port，默认 7890</p>
             </div>
 
+            {/* Bootstrap proxy - shown only when proxy not running */}
+            {proxyStatus?.status !== 'running' && (
+              <div className="mb-3">
+                <label className="block text-sm text-[#E8ECF4] mb-2">引导代理地址（可选）</label>
+                <input
+                  type="text"
+                  value={bootstrapProxy}
+                  onChange={(e) => setBootstrapProxy(e.target.value)}
+                  placeholder="http://127.0.0.1:7890"
+                  className="w-full bg-[rgba(10,15,30,0.8)] border border-[rgba(0,212,170,0.08)] rounded-lg px-4 py-2.5 text-sm text-[#E8ECF4] focus:outline-none focus:border-[#00D4AA] transition-colors font-mono"
+                />
+                <p className="text-xs text-[#505C78] mt-1">已开 FlClash 等外部代理时填写，加速 MMDB 文件下载</p>
+              </div>
+            )}
+
+            {/* MMDB status indicator */}
+            {mmdbStatus && mmdbStatus.files && mmdbStatus.files.length > 0 && (
+              <div className="mb-3 p-3 rounded-lg bg-[rgba(10,15,30,0.8)] border border-[rgba(0,212,170,0.08)]">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs text-[#7B86A2] uppercase tracking-wide flex items-center gap-1">
+                    <Database className="w-3 h-3" /> GeoIP 数据库
+                  </span>
+                  {mmdbStatus.ready ? (
+                    <span className="text-xs text-[#00D4AA] flex items-center gap-1">
+                      <CheckCircle className="w-3 h-3" /> 已就绪
+                    </span>
+                  ) : (
+                    <span className="text-xs text-[#FFB020] flex items-center gap-1">
+                      <Loader2 className="w-3 h-3" /> 缺失 {mmdbStatus.missing?.length || 0} 个
+                    </span>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {mmdbStatus.files.map((f) => (
+                    <span
+                      key={f.name}
+                      className={`text-xs px-2 py-1 rounded font-mono ${
+                        f.exists
+                          ? 'bg-[#00D4AA]/10 text-[#00D4AA] border border-[#00D4AA]/20'
+                          : 'bg-[#FF4060]/10 text-[#FF4060] border border-[#FF4060]/20'
+                      }`}
+                      title={f.exists ? `${f.size} bytes` : '缺失'}
+                    >
+                      {f.exists ? '✓' : '✗'} {f.name}
+                    </span>
+                  ))}
+                </div>
+                {mmdbError && (
+                  <div className="mt-2 pt-2 border-t border-[rgba(255,64,96,0.1)] text-xs text-[#FF4060]">
+                    {mmdbError}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Start/Stop button */}
             <div className="flex items-center gap-3">
               {proxyStatus?.status === 'running' ? (
@@ -532,6 +630,156 @@ export default function SettingsPage() {
         transition={{ delay: 0.15 }}
         className="glass-panel p-5 max-w-lg"
       >
+        <h3 className="text-xs text-[#7B86A2] mb-4 uppercase tracking-wide flex items-center gap-2">
+          <Database className="w-3.5 h-3.5" /> 数据维护
+        </h3>
+
+        <div className="mb-4 space-y-3">
+          <div>
+            <label className="block text-sm text-[#E8ECF4] mb-2">策略</label>
+            <select
+              value={selectedStrategyId ?? ''}
+              onChange={(e) => setSelectedStrategyId(e.target.value ? Number(e.target.value) : null)}
+              className="w-full bg-[rgba(10,15,30,0.8)] border border-[rgba(0,212,170,0.08)] rounded-lg px-4 py-2.5 text-sm text-[#EDF0F7] focus:outline-none focus:border-[#00D4AA]"
+            >
+              <option value="">选择策略...</option>
+              {strategyInstances.map(s => (
+                <option key={s.id} value={s.id}>{s.name} ({s.status})</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm text-[#E8ECF4] mb-2">账户</label>
+            <select
+              value={selectedAccountId ?? ''}
+              onChange={(e) => setSelectedAccountId(e.target.value ? Number(e.target.value) : null)}
+              className="w-full bg-[rgba(10,15,30,0.8)] border border-[rgba(0,212,170,0.08)] rounded-lg px-4 py-2.5 text-sm text-[#EDF0F7] focus:outline-none focus:border-[#00D4AA]"
+            >
+              <option value="">选择账户...</option>
+              {accounts.map(a => (
+                <option key={a.id} value={a.id}>{a.name}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {maintenanceResult && (
+          <div className={`mb-4 p-3 rounded-lg border text-xs ${
+            maintenanceResult.ok
+              ? 'bg-[#00D4AA]/10 text-[#00D4AA] border-[#00D4AA]/20'
+              : 'bg-[#FF4060]/10 text-[#FF4060] border-[#FF4060]/20'
+          }`}>
+            <div className="flex items-center gap-2">
+              {maintenanceResult.ok ? <CheckCircle className="w-3.5 h-3.5" /> : <XCircle className="w-3.5 h-3.5" />}
+              <span className="font-semibold">{maintenanceResult.op}</span>
+            </div>
+            <div className="mt-1">{maintenanceResult.message}</div>
+          </div>
+        )}
+
+        <div className="mb-4">
+          <h4 className="text-xs text-[#7B86A2] mb-2 uppercase tracking-wide flex items-center gap-1">
+            <Trash2 className="w-3 h-3" /> 数据清理
+          </h4>
+          <div className="space-y-2">
+            <MaintenanceButton
+              op="盈亏清零"
+              icon={<RefreshCw className="w-3.5 h-3.5" />}
+              loading={maintenanceLoading === '盈亏清零'}
+              confirmOp={confirmOp}
+              setConfirmOp={setConfirmOp}
+              onClick={() => runMaintenance('盈亏清零', () => resetPnl({
+                account_id: selectedAccountId ?? undefined,
+                strategy_instance_id: selectedStrategyId ?? undefined,
+              }))}
+              disabled={!selectedAccountId && !selectedStrategyId}
+              danger
+            />
+            <MaintenanceButton
+              op="清理 PnL 记录"
+              icon={<Trash2 className="w-3.5 h-3.5" />}
+              loading={maintenanceLoading === '清理 PnL 记录'}
+              confirmOp={confirmOp}
+              setConfirmOp={setConfirmOp}
+              onClick={() => runMaintenance('清理 PnL 记录', () => cleanupPnlRecords({
+                strategy_instance_id: selectedStrategyId ?? undefined,
+              }))}
+              danger
+            />
+            <MaintenanceButton
+              op="清理订单记录"
+              icon={<Trash2 className="w-3.5 h-3.5" />}
+              loading={maintenanceLoading === '清理订单记录'}
+              confirmOp={confirmOp}
+              setConfirmOp={setConfirmOp}
+              onClick={() => runMaintenance('清理订单记录', () => cleanupOrderRecords({
+                strategy_instance_id: selectedStrategyId ?? undefined,
+              }))}
+              danger
+            />
+            <MaintenanceButton
+              op="清理策略事件"
+              icon={<Trash2 className="w-3.5 h-3.5" />}
+              loading={maintenanceLoading === '清理策略事件'}
+              confirmOp={confirmOp}
+              setConfirmOp={setConfirmOp}
+              onClick={() => runMaintenance('清理策略事件', () => cleanupStrategyEvents({
+                strategy_instance_id: selectedStrategyId!,
+              }))}
+              disabled={!selectedStrategyId}
+              danger
+            />
+          </div>
+        </div>
+
+        <div>
+          <h4 className="text-xs text-[#7B86A2] mb-2 uppercase tracking-wide flex items-center gap-1">
+            <RefreshCw className="w-3 h-3" /> 数据校正
+          </h4>
+          <div className="space-y-2">
+            <MaintenanceButton
+              op="校正总权益"
+              icon={<RefreshCw className="w-3.5 h-3.5" />}
+              loading={maintenanceLoading === '校正总权益'}
+              confirmOp={confirmOp}
+              setConfirmOp={setConfirmOp}
+              onClick={() => runMaintenance('校正总权益', () => correctEquity({
+                account_id: selectedAccountId!,
+              }))}
+              disabled={!selectedAccountId}
+            />
+            <MaintenanceButton
+              op="校正未实现盈亏"
+              icon={<RefreshCw className="w-3.5 h-3.5" />}
+              loading={maintenanceLoading === '校正未实现盈亏'}
+              confirmOp={confirmOp}
+              setConfirmOp={setConfirmOp}
+              onClick={() => runMaintenance('校正未实现盈亏', () => correctUnrealizedPnl({
+                strategy_instance_id: selectedStrategyId!,
+              }))}
+              disabled={!selectedStrategyId}
+            />
+            <MaintenanceButton
+              op="校正已实现盈亏"
+              icon={<RefreshCw className="w-3.5 h-3.5" />}
+              loading={maintenanceLoading === '校正已实现盈亏'}
+              confirmOp={confirmOp}
+              setConfirmOp={setConfirmOp}
+              onClick={() => runMaintenance('校正已实现盈亏', () => correctRealizedPnl({
+                strategy_instance_id: selectedStrategyId!,
+              }))}
+              disabled={!selectedStrategyId}
+            />
+          </div>
+        </div>
+      </motion.div>
+
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.2 }}
+        className="glass-panel p-5 max-w-lg"
+      >
         <h3 className="text-xs text-[#7B86A2] mb-4 uppercase tracking-wide">密码修改</h3>
         <form onSubmit={handlePasswordChange} className="space-y-4">
           {passwordError && (
@@ -566,7 +814,7 @@ export default function SettingsPage() {
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.2 }}
+        transition={{ delay: 0.25 }}
         className="glass-panel p-5 max-w-lg"
       >
         <h3 className="text-xs text-[#7B86A2] mb-3 uppercase tracking-wide">说明</h3>
@@ -577,5 +825,53 @@ export default function SettingsPage() {
         </div>
       </motion.div>
     </div>
+  )
+}
+
+interface MaintenanceButtonProps {
+  op: string
+  icon: React.ReactNode
+  loading: boolean
+  confirmOp: string | null
+  setConfirmOp: (op: string | null) => void
+  onClick: () => void
+  disabled?: boolean
+  danger?: boolean
+}
+
+function MaintenanceButton({ op, icon, loading, confirmOp, setConfirmOp, onClick, disabled, danger }: MaintenanceButtonProps) {
+  const isConfirming = confirmOp === op
+  useEffect(() => {
+    if (isConfirming) {
+      const timer = setTimeout(() => setConfirmOp(null), 5000)
+      return () => clearTimeout(timer)
+    }
+  }, [isConfirming, setConfirmOp])
+
+  if (isConfirming) {
+    return (
+      <button
+        onClick={onClick}
+        disabled={loading}
+        className="bg-[#FF4060] text-white rounded-lg px-4 py-2 text-sm w-full flex items-center gap-2 animate-pulse disabled:opacity-50"
+      >
+        {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <AlertTriangle className="w-3.5 h-3.5" />}
+        确认{op}?
+      </button>
+    )
+  }
+  const baseClass = 'rounded-lg px-4 py-2 text-sm disabled:opacity-50 w-full text-left flex items-center gap-2 transition-colors'
+  const styleClass = danger
+    ? 'bg-[#FF4060]/10 text-[#FF4060] border border-[#FF4060]/20 hover:bg-[#FF4060]/20'
+    : 'bg-[#00D4AA]/10 text-[#00D4AA] border border-[#00D4AA]/20 hover:bg-[#00D4AA]/20'
+  return (
+    <button
+      onClick={() => setConfirmOp(op)}
+      disabled={disabled || loading}
+      className={`${baseClass} ${styleClass}`}
+    >
+      {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : icon}
+      {op}
+    </button>
   )
 }
