@@ -26,3 +26,8 @@ class AccountUpdate(BaseModel):
     passphrase: str | None = None
     trade_mode: str | None = None
     is_active: bool | None = None
+
+
+class ChangePasswordRequest(BaseModel):
+    old_password: str
+    new_password: str

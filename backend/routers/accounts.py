@@ -1,3 +1,4 @@
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from database import get_db
@@ -166,7 +167,7 @@ def get_balance(
             trade_mode=account.trade_mode,
             account_name=account.name,
         )
-        balances = client.get_balance()
+        balances = asyncio.run(client.get_balance())
         assets = []
         total_equity = 0.0
         try:
@@ -194,6 +195,46 @@ def get_balance(
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取余额失败: {str(e)}")
+
+
+@router.get("/{account_id}/positions")
+def get_positions(
+    account_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="账户不存在")
+
+    try:
+        client = OKXClient(
+            api_key_encrypted=account.api_key_encrypted,
+            secret_encrypted=account.secret_key_encrypted,
+            passphrase_encrypted=account.passphrase_encrypted,
+            trade_mode=account.trade_mode,
+            account_name=account.name,
+        )
+        resp = client._request("GET", "/api/v5/account/positions")
+        data = resp.get("data", [])
+
+        positions = []
+        for pos in data:
+            if pos.get("pos", "0") == "0":
+                continue
+            positions.append({
+                "instId": pos.get("instId", ""),
+                "posSide": pos.get("posSide", ""),
+                "pos": pos.get("pos", "0"),
+                "markPx": pos.get("markPx", "0"),
+                "upl": pos.get("upl", "0"),
+                "avgPx": pos.get("avgPx", "0"),
+                "notionalUsd": pos.get("notionalUsd", "0"),
+            })
+
+        return positions
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取持仓失败: {str(e)}")
 
 
 @router.get("/{account_id}/balance/cached")

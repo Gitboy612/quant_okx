@@ -1,13 +1,21 @@
+import asyncio
 import json
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
+
 from services.okx_client import OKXClient
 from database import SessionLocal
 
+if TYPE_CHECKING:
+    from services.order_manager import OrderManager
+    from services.okx_ws_client import OKXWsClient
+
 
 class BaseStrategy(ABC):
-    def __init__(self, instance_id: int, params: dict, client: OKXClient, db_session_factory, account_id: int | None = None):
+    def __init__(self, instance_id: int, params: dict, client: OKXClient, db_session_factory, account_id: int | None = None,
+                 order_manager: "OrderManager | None" = None, ws_client: "OKXWsClient | None" = None):
         self.instance_id = instance_id
         self.params = params
         self.client = client
@@ -15,10 +23,27 @@ class BaseStrategy(ABC):
         self.account_id = account_id
         self._running = False
         self._paused = False
-        self._active_orders: dict[str, str] = {}  # order_id -> instId (symbol)
-        self._realized_pnl = 0.0  # track accumulated realized PnL
-        self._buy_trades: list[dict] = []  # track buy trades for PnL calc
-        self._initial_equity = 0.0  # initial equity, set once at strategy start
+        self._realized_pnl = 0.0
+        self._buy_trades: list[dict] = []
+        self._initial_equity = 0.0
+
+        # OrderManager setup
+        if order_manager is not None:
+            self.order_manager = order_manager
+        else:
+            from services.order_manager import OrderManager
+            self.order_manager = OrderManager(db_session_factory, client, instance_id, account_id or 0)
+
+        # WebSocket client
+        self._ws_client = ws_client
+
+    @property
+    def ws_client(self):
+        return self._ws_client
+
+    @ws_client.setter
+    def ws_client(self, value):
+        self._ws_client = value
 
     def _record_event(self, event_type: str, message: str, details: dict | None = None):
         """Record a strategy event to the database."""
@@ -47,15 +72,32 @@ class BaseStrategy(ABC):
     async def validate_params(self) -> bool:
         pass
 
-    def start(self):
+    async def start(self):
         self._running = True
         self._paused = False
+        # Start WebSocket if available
+        if self._ws_client and not self._ws_client.is_connected:
+            await self._ws_client.connect()
+            symbol = self.params.get("symbol", "")
+            if symbol:
+                inst_type = "SWAP" if "-SWAP" in symbol else "SPOT"
+                await self._ws_client.subscribe_orders(inst_type, symbol)
         self._record_event("started", "策略已启动")
 
     def pause(self):
         self._paused = True
-        self._cancel_all_active_orders()
-        self._record_event("paused", "策略已暂停")
+        symbol = self.params.get("symbol", "")
+        import asyncio as _asyncio
+        try:
+            _asyncio.get_running_loop()
+            _asyncio.ensure_future(self._pause_async(symbol))
+        except RuntimeError:
+            cancelled = _asyncio.run(self.order_manager.cancel_all(symbol))
+            self._record_event("paused", f"策略已暂停, 撤销 {cancelled} 笔订单")
+
+    async def _pause_async(self, symbol: str):
+        cancelled = await self.order_manager.cancel_all(symbol)
+        self._record_event("paused", f"策略已暂停, 撤销 {cancelled} 笔订单")
 
     def resume(self):
         self._paused = False
@@ -64,40 +106,18 @@ class BaseStrategy(ABC):
     def stop(self):
         self._running = False
         self._paused = False
-        self._cancel_all_active_orders()
-        self._record_event("stopped", "策略已停止")
+        symbol = self.params.get("symbol", "")
+        import asyncio as _asyncio
+        try:
+            _asyncio.get_running_loop()
+            _asyncio.ensure_future(self._stop_async(symbol))
+        except RuntimeError:
+            cancelled = _asyncio.run(self.order_manager.cancel_all(symbol))
+            self._record_event("stopped", f"策略已停止, 撤销 {cancelled} 笔订单")
 
-    def _cancel_all_active_orders(self):
-        """Cancel all tracked active orders when pausing or stopping."""
-        cancelled = 0
-        failed = 0
-        total = len(self._active_orders)
-        for order_id, inst_id in list(self._active_orders.items()):
-            try:
-                resp = self.client.cancel_order(inst_id, order_id)
-                if resp.get("code") == "0":
-                    cancelled += 1
-                    self.record_order(inst_id, "cancel", "cancel", 0, 0, order_id=order_id, status="canceled")
-                else:
-                    failed += 1
-                    print(f"[BaseStrategy] cancel order {order_id} failed: {resp.get('msg', '')}")
-            except Exception as e:
-                failed += 1
-                print(f"[BaseStrategy] cancel order {order_id} error: {e}")
-            self._active_orders.pop(order_id, None)
-        if cancelled > 0:
-            print(f"[BaseStrategy] Cancelled {cancelled} active orders for strategy #{self.instance_id}")
-            self._record_event("order_canceled", f"批量撤单完成: 成功 {cancelled}/{total}",
-                               {"cancelled": cancelled, "failed": failed, "total": total})
-
-    def track_order(self, inst_id: str, order_id: str):
-        """Track an active order so it can be cancelled on pause/stop."""
-        if order_id:
-            self._active_orders[order_id] = inst_id
-
-    def untrack_order(self, order_id: str):
-        """Remove an order from tracking (e.g. when it's filled)."""
-        self._active_orders.pop(order_id, None)
+    async def _stop_async(self, symbol: str):
+        cancelled = await self.order_manager.cancel_all(symbol)
+        self._record_event("stopped", f"策略已停止, 撤销 {cancelled} 笔订单")
 
     def add_realized_pnl(self, pnl: float):
         """Accumulate realized PnL from a completed trade."""
@@ -110,69 +130,61 @@ class BaseStrategy(ABC):
         """Restore realized PnL from DB after restart."""
         self._realized_pnl = pnl
 
-    def sync_orders(self, symbol: str) -> dict[str, dict[str, str]]:
+    async def sync_orders(self, symbol: str) -> dict[str, dict[str, str]]:
         """
-        Sync unfilled orders from DB on strategy restart.
+        Sync unfilled orders from DB on strategy restart using OrderManager.
         Queries OKX for each order's current status, updates DB,
         and returns still-active orders for re-tracking.
         Returns: {"buy": {idx: order_id}, "sell": {idx: order_id}}
         """
-        from models.order import Order
-        db = self.db_session_factory()
+        count = self.order_manager.load_from_db()
+
         active_buy: dict[str, str] = {}
         active_sell: dict[str, str] = {}
 
-        try:
-            pending = db.query(Order).filter(
-                Order.strategy_instance_id == self.instance_id,
-                Order.status == "live"
-            ).all()
-
-            for order in pending:
-                if not order.order_id:
-                    continue
-                try:
-                    info = self.client.get_order(symbol, order.order_id)
-                    if info and len(info) > 0:
-                        state = info[0].get("state", "")
-                        if state == "filled":
-                            order.status = "filled"
-                            order.filled_quantity = float(info[0].get("accFillSz", order.quantity))
-                            self._record_event("order_filled",
-                                f"{order.side.upper()} 已成交(恢复): {symbol} ordId={order.order_id} px={order.price} qty={order.quantity}",
-                                {"order_id": order.order_id, "side": order.side, "price": order.price, "quantity": order.quantity})
-                            # If this was a sell that filled, we need to calculate realized PnL
-                            # The grid strategy will handle this in its own context
-                        elif state == "canceled":
-                            order.status = "canceled"
-                            self._record_event("order_canceled",
-                                f"{order.side.upper()} 已撤销(恢复): {symbol} ordId={order.order_id}",
-                                {"order_id": order.order_id, "side": order.side})
-                        elif state in ("live", "partially_filled"):
-                            # Still active - re-track
-                            self._active_orders[order.order_id] = symbol
-                            active_buy[order.order_id] = order.side  # temporary, grid strategy will remap
-                            self._record_event("order_placed",
-                                f"{order.side.upper()} 订单恢复跟踪: {symbol} ordId={order.order_id} px={order.price} qty={order.quantity}",
-                                {"order_id": order.order_id, "side": order.side, "price": order.price, "quantity": order.quantity, "status": "live"})
-                    else:
-                        # Order not found on OKX, mark as canceled
-                        order.status = "canceled"
+        for order in self.order_manager.get_active_orders():
+            if order.symbol != symbol:
+                continue
+            try:
+                info = await self.client.get_order(symbol, order.ordId)
+                if info and len(info) > 0:
+                    state = info[0].get("state", "")
+                    if state == "filled":
+                        self.order_manager.update_order(order.ordId, state="filled",
+                            fillPx=info[0].get("fillPx", ""),
+                            fillSz=info[0].get("fillSz", ""),
+                            fee=info[0].get("fee", ""))
+                        self._record_event("order_filled",
+                            f"{order.side.upper()} 已成交(恢复): {symbol} ordId={order.ordId} px={order.px} qty={order.sz}",
+                            {"order_id": order.ordId, "side": order.side, "price": order.px, "quantity": order.sz})
+                    elif state == "canceled":
+                        self.order_manager.update_order(order.ordId, state="canceled")
                         self._record_event("order_canceled",
-                            f"{order.side.upper()} 订单不存在(恢复): {symbol} ordId={order.order_id}",
-                            {"order_id": order.order_id, "side": order.side})
-                except Exception as e:
-                    print(f"[sync_orders] Error syncing order {order.order_id}: {e}")
-                    # Keep as live, will be checked in main loop
-                    self._active_orders[order.order_id] = symbol
-                    active_buy[order.order_id] = order.side
+                            f"{order.side.upper()} 已撤销(恢复): {symbol} ordId={order.ordId}",
+                            {"order_id": order.ordId, "side": order.side})
+                    elif state in ("live", "partially_filled"):
+                        if order.side == "buy":
+                            active_buy[order.ordId] = order.side
+                        else:
+                            active_sell[order.ordId] = order.side
+                        self._record_event("order_placed",
+                            f"{order.side.upper()} 订单恢复跟踪: {symbol} ordId={order.ordId} px={order.px} qty={order.sz}",
+                            {"order_id": order.ordId, "side": order.side, "price": order.px, "quantity": order.sz, "status": "live"})
+                else:
+                    self.order_manager.update_order(order.ordId, state="canceled")
+                    self._record_event("order_canceled",
+                        f"{order.side.upper()} 订单不存在(恢复): {symbol} ordId={order.ordId}",
+                        {"order_id": order.ordId, "side": order.side})
+            except Exception as e:
+                print(f"[sync_orders] Error syncing order {order.ordId}: {e}")
+                if order.side == "buy":
+                    active_buy[order.ordId] = order.side
+                else:
+                    active_sell[order.ordId] = order.side
 
-            db.commit()
-            self._record_event("started",
-                f"订单同步完成: 恢复 {len(pending)} 笔未成交订单, {len(self._active_orders)} 笔仍活跃",
-                {"total_pending": len(pending), "still_active": len(self._active_orders)})
-        finally:
-            db.close()
+        self._record_event("started",
+            f"订单同步完成: 加载 {count} 笔订单, {len(self.order_manager.get_active_orders())} 笔仍活跃",
+            {"total_loaded": count, "still_active": len(self.order_manager.get_active_orders())})
 
         return {"buy": active_buy, "sell": active_sell}
 
@@ -185,25 +197,23 @@ class BaseStrategy(ABC):
         return self._paused
 
     def record_order(self, symbol: str, side: str, order_type: str, price: float, quantity: float, order_id: str = "", status: str = "filled"):
-        from models.order import Order
-        db = self.db_session_factory()
-        try:
-            order = Order(
-                strategy_instance_id=self.instance_id,
-                account_id=None,
+        # Delegate to OrderManager for persistence
+        if status == "live":
+            self.order_manager.add_order(
+                ordId=order_id,
+                clOrdId="",
                 symbol=symbol,
-                order_id=order_id,
                 side=side,
-                order_type=order_type,
-                price=price,
-                quantity=quantity,
-                filled_quantity=quantity,
-                status=status,
+                px=str(price),
+                sz=str(quantity),
+                state="live",
             )
-            db.add(order)
-            db.commit()
-        finally:
-            db.close()
+        elif order_id:
+            update_kwargs = {"state": status}
+            if status == "filled":
+                update_kwargs["fillSz"] = str(quantity)
+                update_kwargs["fillPx"] = str(price)
+            self.order_manager.update_order(order_id, **update_kwargs)
 
         event_type_map = {
             "filled": "order_filled",

@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
-import { listAccounts } from '../api/accounts'
+import { useSelectedAccount } from '../hooks/useSelectedAccount'
 import Dropdown from './Dropdown'
 import type { Account } from '../types'
+import { Wifi, ChevronRight } from 'lucide-react'
 
 interface TopBarProps {
   selectedAccountId: number | null
@@ -9,10 +10,12 @@ interface TopBarProps {
 }
 
 export default function TopBar({ selectedAccountId, onAccountChange }: TopBarProps) {
-  const [accounts, setAccounts] = useState<Account[]>([])
+  const { accounts } = useSelectedAccount()
+  const [time, setTime] = useState(new Date())
 
   useEffect(() => {
-    listAccounts().then((res) => setAccounts(res.data)).catch(() => {})
+    const timer = setInterval(() => setTime(new Date()), 1000)
+    return () => clearInterval(timer)
   }, [])
 
   const accountOptions = [
@@ -21,17 +24,29 @@ export default function TopBar({ selectedAccountId, onAccountChange }: TopBarPro
   ]
 
   return (
-    <div className="h-14 border-b border-[#1E1E28] flex items-center justify-between px-6 shrink-0">
-      <div className="flex items-center gap-2">
-        <span className="text-xs text-[#6B6B7B]">账户</span>
-        <Dropdown
-          options={accountOptions}
-          value={selectedAccountId ?? ''}
-          onChange={(v) => onAccountChange(v ? Number(v) : null)}
-        />
+    <div className="h-12 flex items-center justify-between px-6 shrink-0 relative z-10 border-b border-[rgba(0,212,170,0.06)] bg-[#050711]">
+      <div className="flex items-center gap-3">
+        <div className="flex items-center gap-1.5 text-[#7B86A2]">
+          <span className="text-[10px] uppercase tracking-wider">账户</span>
+          <ChevronRight className="w-3 h-3 opacity-50" />
+          <Dropdown
+            options={accountOptions}
+            value={selectedAccountId ?? ''}
+            onChange={(v) => onAccountChange(v ? Number(v) : null)}
+          />
+        </div>
       </div>
-      <div className="text-xs text-[#6B6B7B]">
-        数据实时刷新中
+
+      <div className="flex items-center gap-4">
+        <div className="text-[12px] font-mono text-[#7B86A2] tabular-nums">
+          {time.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+        </div>
+
+        <div className="flex items-center gap-1.5">
+          <Wifi className="w-3 h-3 text-[#00D4AA]/60" />
+          <span className="text-[10px] text-[#00D4AA]/60">已连接</span>
+          <span className="w-1.5 h-1.5 rounded-full bg-[#00D4AA] animate-pulse" />
+        </div>
       </div>
     </div>
   )

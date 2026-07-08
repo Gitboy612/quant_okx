@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+﻿import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { listLogs } from '../api/logs'
 import type { OperationLog, PaginatedResponse } from '../types'
@@ -30,11 +30,11 @@ export default function LogsPage() {
       animate={{ opacity: 1 }}
       className="space-y-6"
     >
-      <h2 className="text-sm font-medium text-[#E8E8ED]">操作日志</h2>
+      <h2 className="text-sm font-medium text-[#EDF0F7]">操作日志</h2>
 
-      <div className="bg-[#14141A] rounded-lg border border-[#1E1E28] p-5">
+      <div className="glass-panel p-5">
         {data.items.length === 0 ? (
-          <div className="py-12 text-center text-[#6B6B7B] text-sm">
+          <div className="py-12 text-center text-[#7B86A2] text-sm">
             暂无操作记录
           </div>
         ) : (
@@ -45,9 +45,9 @@ export default function LogsPage() {
                 initial={{ opacity: 0, x: -10 }}
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ delay: i * 0.03 }}
-                className="flex items-start gap-4 py-3 border-b border-[#1E1E28]/50 last:border-0"
+                className="flex items-start gap-4 py-3 border-b border-[rgba(0,212,170,0.08)]/50 last:border-0"
               >
-                <span className="text-xs text-[#6B6B7B] font-mono whitespace-nowrap mt-0.5">
+                <span className="text-xs text-[#7B86A2] font-mono whitespace-nowrap mt-0.5">
                   {new Date(log.created_at).toLocaleString('zh-CN', {
                     month: 'short',
                     day: 'numeric',
@@ -59,14 +59,14 @@ export default function LogsPage() {
                 <div className="flex-1 min-w-0">
                   <span className="text-sm">{actionLabels[log.action] || log.action}</span>
                   {log.target_type && (
-                    <span className="text-xs text-[#6B6B7B] ml-2">
+                    <span className="text-xs text-[#7B86A2] ml-2">
                       {log.target_type === 'strategy' ? '策略' : log.target_type === 'account' ? '账户' : log.target_type}
                       {log.target_id ? ` #${log.target_id}` : ''}
                     </span>
                   )}
                 </div>
                 {log.ip_address && (
-                  <span className="text-xs text-[#6B6B7B] font-mono">{log.ip_address}</span>
+                  <span className="text-xs text-[#7B86A2] font-mono">{log.ip_address}</span>
                 )}
               </motion.div>
             ))}

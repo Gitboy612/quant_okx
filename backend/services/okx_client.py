@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -10,6 +11,13 @@ from database import SessionLocal
 from services.encryption_service import decrypt
 from services.okx_error_codes import get_error_message
 from config import OKX_BASE_URL, OKX_DNS_OVERRIDE
+
+from services.okx.base import OKXBaseClient
+from services.okx.public import PublicAPI
+from services.okx.market import MarketAPI
+from services.okx.account import AccountAPI
+from services.okx.trade import TradeAPI
+from services.okx.funding import FundingAPI
 
 
 class OKXClient:
@@ -37,10 +45,26 @@ class OKXClient:
         )
         self._sync_time()
 
+        self._async_client = OKXBaseClient(
+            api_key=self.api_key,
+            secret_key=self.secret_key,
+            passphrase=self.passphrase,
+            trade_mode=self.trade_mode,
+            base_url=self.base_url,
+            strategy_instance_id=strategy_instance_id,
+            account_name=account_name,
+            proxy=proxy,
+        )
+        self.public = PublicAPI(self._async_client)
+        self.market = MarketAPI(self._async_client)
+        self.account = AccountAPI(self._async_client)
+        self.trade = TradeAPI(self._async_client)
+        self.funding = FundingAPI(self._async_client)
+
     @classmethod
     def set_global_proxy(cls, proxy_url: str | None):
-        """Set proxy for all future OKXClient instances."""
         cls._global_proxy = proxy_url
+        OKXBaseClient.set_global_proxy(proxy_url)
 
     def _build_dns_map(self) -> dict[str, str]:
         mapping: dict[str, str] = {}
@@ -229,41 +253,41 @@ class OKXClient:
         self._log_call(path, method, body_str, resp_str, resp_code, status, req_meta)
         return resp_json
 
-    def get_balance(self):
-        resp = self._request("GET", "/api/v5/account/balance")
-        return resp.get("data", [{}])[0] if resp.get("data") else {}
+    async def aclose(self):
+        await self._async_client.aclose()
+        self._client.close()
 
-    def get_positions(self):
-        resp = self._request("GET", "/api/v5/account/positions")
-        return resp.get("data", [])
+    def __del__(self):
+        try:
+            self._client.close()
+        except Exception:
+            pass
 
-    def get_ticker(self, inst_id: str):
-        resp = self._request("GET", f"/api/v5/market/ticker?instId={inst_id}")
-        return resp.get("data", [])
+    async def get_balance(self) -> dict:
+        return await self.account.get_balance(ccy=None)
 
-    def get_candles(self, inst_id: str, bar: str = "1m", limit: str = "100"):
-        resp = self._request("GET", f"/api/v5/market/candles?instId={inst_id}&bar={bar}&limit={limit}")
-        return resp.get("data", [])
+    async def get_positions(self) -> list:
+        return await self.account.get_positions()
 
-    def place_order(self, inst_id: str, side: str, ord_type: str, sz: str, px: str | None = None):
-        body: dict = {
-            "instId": inst_id,
-            "side": side,
-            "ordType": ord_type,
-            "sz": sz,
-            "tdMode": "cross",
-        }
-        if px and ord_type == "limit":
-            body["px"] = px
-        return self._request("POST", "/api/v5/trade/order", body)
+    async def get_ticker(self, inst_id: str) -> list:
+        return await self.market.get_ticker(instId=inst_id)
 
-    def batch_place_orders(self, orders: list[dict]) -> dict:
-        """Batch place up to 20 orders at once.
-        Each order dict: {"instId": str, "side": "buy"|"sell", "ordType": "limit",
-                          "sz": str, "px": str}
-        tdMode is auto-added based on instId.
-        """
-        batch_body = []
+    async def get_candles(self, inst_id: str, bar: str = "1m", limit: str = "100") -> list:
+        return await self.market.get_candles(instId=inst_id, bar=bar, limit=limit)
+
+    async def place_order(self, inst_id: str, side: str, ord_type: str, sz: str, px: str | None = None) -> dict:
+        body_px = px if (px and ord_type == "limit") else None
+        return await self.trade.place_order(
+            instId=inst_id,
+            tdMode="cross",
+            side=side,
+            ordType=ord_type,
+            sz=sz,
+            px=body_px,
+        )
+
+    async def batch_place_orders(self, orders: list[dict]) -> dict:
+        processed_orders = []
         for o in orders:
             item = {
                 "instId": o["instId"],
@@ -274,24 +298,17 @@ class OKXClient:
             }
             if "px" in o:
                 item["px"] = o["px"]
-            batch_body.append(item)
-        return self._request("POST", "/api/v5/trade/batch-orders", batch_body)
+            processed_orders.append(item)
+        return await self.trade.batch_place_orders(orders=processed_orders)
 
-    def cancel_order(self, inst_id: str, order_id: str):
-        body = {"instId": inst_id, "ordId": order_id}
-        return self._request("POST", "/api/v5/trade/cancel-order", body)
+    async def cancel_order(self, inst_id: str, order_id: str) -> dict:
+        return await self.trade.cancel_order(instId=inst_id, ordId=order_id)
 
-    def get_order(self, inst_id: str, order_id: str):
-        resp = self._request("GET", f"/api/v5/trade/order?instId={inst_id}&ordId={order_id}")
-        return resp.get("data", [])
+    async def get_order(self, inst_id: str, order_id: str) -> list:
+        return await self.trade.get_order(instId=inst_id, ordId=order_id)
 
-    def get_pending_orders(self, inst_id: str | None = None):
-        path = "/api/v5/trade/orders-pending"
-        if inst_id:
-            path += f"?instId={inst_id}"
-        resp = self._request("GET", path)
-        return resp.get("data", [])
+    async def get_pending_orders(self, inst_id: str | None = None) -> list:
+        return await self.trade.get_pending_orders(instId=inst_id)
 
-    def get_orders_history(self, inst_id: str, limit: str = "50"):
-        resp = self._request("GET", f"/api/v5/trade/orders-history?instId={inst_id}&limit={limit}")
-        return resp.get("data", [])
+    async def get_orders_history(self, inst_id: str, limit: str = "50") -> list:
+        return await self.trade.get_orders_history(instId=inst_id, limit=limit)

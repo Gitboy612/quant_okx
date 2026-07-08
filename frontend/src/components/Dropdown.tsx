@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+﻿import { useState, useRef, useEffect } from 'react'
 import { ChevronDown } from 'lucide-react'
 
 interface DropdownOption {
@@ -34,15 +34,15 @@ export default function Dropdown({ options, value, onChange, className = '', pla
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className="flex items-center gap-2 bg-[#14141A] border border-[#1E1E28] rounded-lg px-3 py-2 text-sm text-[#E8E8ED] hover:border-[#2A2A3A] transition-colors min-w-[120px] justify-between"
+        className="flex items-center gap-2 bg-[rgba(12,18,38,0.65)] border border-[rgba(0,212,170,0.08)] rounded-lg px-3 py-2 text-sm text-[#EDF0F7] hover:border-[rgba(0,212,170,0.18)] transition-all duration-300 min-w-[120px] justify-between hover:shadow-[0_0_15px_rgba(0,212,170,0.06)]"
       >
-        <span className={selected ? 'text-[#E8E8ED]' : 'text-[#6B6B7B]'}>
+        <span className={selected ? 'text-[#EDF0F7]' : 'text-[#7B86A2]'}>
           {selected ? selected.label : (placeholder || '请选择')}
         </span>
-        <ChevronDown className={`w-3.5 h-3.5 text-[#6B6B7B] transition-transform ${open ? 'rotate-180' : ''}`} />
+        <ChevronDown className={`w-3.5 h-3.5 text-[#7B86A2] transition-transform duration-300 ${open ? 'rotate-180' : ''}`} />
       </button>
       {open && (
-        <div className="absolute z-50 mt-1 w-full bg-[#1A1A24] border border-[#2A2A3A] rounded-lg shadow-lg shadow-black/40 overflow-hidden py-1">
+        <div className="absolute z-50 mt-1 w-full bg-[rgba(10,15,30,0.85)] border border-[rgba(0,212,170,0.1)] rounded-lg shadow-[0_0_30px_rgba(0,0,0,0.5),0_0_15px_rgba(0,212,170,0.05)] overflow-hidden py-1">
           {options.map((opt) => (
             <button
               key={opt.value}
@@ -51,10 +51,10 @@ export default function Dropdown({ options, value, onChange, className = '', pla
                 onChange(opt.value)
                 setOpen(false)
               }}
-              className={`w-full text-left px-3 py-2 text-sm transition-colors ${
+              className={`w-full text-left px-3 py-2 text-sm transition-all duration-200 ${
                 opt.value === value
-                  ? 'bg-[#00D4AA]/10 text-[#00D4AA]'
-                  : 'text-[#E8E8ED] hover:bg-[#14141A]'
+                  ? 'bg-[#00D4AA]/10 text-[#00D4AA] shadow-[inset_3px_0_0_0_rgba(0,212,170,0.6)]'
+                  : 'text-[#EDF0F7] hover:bg-[rgba(0,212,170,0.06)]'
               }`}
             >
               {opt.label}

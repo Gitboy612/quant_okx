@@ -12,7 +12,7 @@ from strategies.advanced_grid_hedge_strategy import AdvancedGridHedgeStrategy
 
 class StrategyEngine:
     _instance = None
-    _tasks: dict[int, asyncio.Task] = {}
+    _tasks: dict[int, tuple[asyncio.Task, object]] = {}
     _strategy_map = {
         "grid": GridStrategy,
         "trend": TrendStrategy,
@@ -25,7 +25,7 @@ class StrategyEngine:
             cls._instance = super().__new__(cls)
         return cls._instance
 
-    def check_feasibility(self, instance_id: int) -> dict:
+    async def check_feasibility(self, instance_id: int) -> dict:
         db = SessionLocal()
         try:
             instance = db.query(StrategyInstance).filter(StrategyInstance.id == instance_id).first()
@@ -49,7 +49,7 @@ class StrategyEngine:
             symbol = params.get("symbol", "")
             strategy_type = template.strategy_type
 
-            tickers = client.get_ticker(symbol)
+            tickers = await client.get_ticker(symbol)
             if not tickers:
                 return {"ok": False, "reason": f"无法获取 {symbol} 行情数据，请检查交易对是否存在"}
 
@@ -65,7 +65,7 @@ class StrategyEngine:
                 step = (upper - lower) / (grid_count - 1)
                 grids_below = sum(1 for i in range(grid_count) if (lower + i * step) <= current_price)
                 required_min = round(order_qty * grids_below * lower, 2)
-                balance_resp = client.get_balance()
+                balance_resp = await client.get_balance()
                 available_usdt = self._extract_available(balance_resp, "USDT")
                 return {
                     "ok": available_usdt >= required_min * 0.3,
@@ -84,7 +84,7 @@ class StrategyEngine:
                 if order_qty <= 0:
                     return {"ok": False, "reason": "交易量必须大于0"}
                 if "-SWAP" in symbol:
-                    balance_resp = client.get_balance()
+                    balance_resp = await client.get_balance()
                     available_usdt = self._extract_available(balance_resp, "USDT")
                     required = round(order_qty * current_price, 2)
                     return {"ok": available_usdt >= required * 0.2, "current_price": current_price,
@@ -126,6 +126,8 @@ class StrategyEngine:
             if not strategy_cls:
                 return
 
+            from services.encryption_service import decrypt
+
             client = OKXClient(
                 api_key_encrypted=account.api_key_encrypted,
                 secret_encrypted=account.secret_key_encrypted,
@@ -135,14 +137,29 @@ class StrategyEngine:
                 account_name=account.name,
             )
 
+            # Create OrderManager
+            from services.order_manager import OrderManager
+            order_manager = OrderManager(SessionLocal, client, instance.id, account.id)
+
+            # Create OKXWsClient
+            from services.okx_ws_client import OKXWsClient
+            ws_client = OKXWsClient(
+                api_key=decrypt(account.api_key_encrypted),
+                secret_key=decrypt(account.secret_key_encrypted),
+                passphrase=decrypt(account.passphrase_encrypted) if account.passphrase_encrypted else "",
+                trade_mode=account.trade_mode,
+            )
+
             strategy = strategy_cls(
                 instance_id=instance.id,
                 params=instance.params,
                 client=client,
                 db_session_factory=SessionLocal,
                 account_id=account.id,
+                order_manager=order_manager,
+                ws_client=ws_client,
             )
-            strategy.start()
+            await strategy.start()
 
             instance.status = "running"
             instance.started_at = datetime.now(timezone.utc)
@@ -184,8 +201,12 @@ class StrategyEngine:
     async def stop_strategy(self, instance_id: int):
         entry = self._tasks.get(instance_id)
         if entry:
-            entry[1].stop()
-            entry[0].cancel()
+            task, strategy = entry
+            strategy.stop()
+            # Disconnect WebSocket
+            if strategy.ws_client:
+                await strategy.ws_client.disconnect()
+            task.cancel()
             del self._tasks[instance_id]
         # Always update DB status, even if task not in memory
         db = SessionLocal()

@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models.user import User
 from models.log import OperationLog
-from schemas.auth import LoginRequest, TokenResponse
+from schemas.auth import LoginRequest, TokenResponse, ChangePasswordRequest
 from services.auth_service import hash_password, verify_password, create_access_token
 from middleware.auth import get_current_user
 from config import LOGIN_MAX_ATTEMPTS, LOGIN_LOCKOUT_MINUTES
@@ -57,3 +57,21 @@ def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
 @router.get("/me")
 def get_me(user: User = Depends(get_current_user)):
     return {"id": user.id, "username": user.username}
+
+
+@router.put("/password")
+def change_password(
+    body: ChangePasswordRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not verify_password(body.old_password, user.password_hash):
+        raise HTTPException(status_code=401, detail="旧密码不正确")
+
+    if len(body.new_password) < 6:
+        raise HTTPException(status_code=400, detail="密码至少需要6位")
+
+    user.password_hash = hash_password(body.new_password)
+    db.commit()
+
+    return {"message": "密码修改成功"}

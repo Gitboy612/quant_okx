@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 
 interface PnlRecord {
@@ -5,21 +6,37 @@ interface PnlRecord {
   total_pnl: number
 }
 
+export type TimeRange = '5m' | '30m' | '1d' | '1w' | 'all'
+
 interface PnLChartProps {
   data: PnlRecord[]
+  timeRange?: TimeRange
 }
 
-export default function PnLChart({ data }: PnLChartProps) {
-  if (data.length === 0) {
+const TIME_RANGE_DURATIONS: Record<TimeRange, number | null> = {
+  '5m': 5 * 60 * 1000,
+  '30m': 30 * 60 * 1000,
+  '1d': 24 * 60 * 60 * 1000,
+  '1w': 7 * 24 * 60 * 60 * 1000,
+  'all': null,
+}
+
+function PnLChart({ data, timeRange = '1d' }: PnLChartProps) {
+  const duration = TIME_RANGE_DURATIONS[timeRange]
+  const cutoff = duration != null ? Date.now() - duration : 0
+
+  const filteredData = data.filter((r) => new Date(r.recorded_at).getTime() >= cutoff)
+
+  if (filteredData.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center h-full text-[#6B6B7B] text-sm gap-2">
+      <div className="flex flex-col items-center justify-center h-full text-[#7B86A2] text-sm gap-2">
         <span>暂无盈亏数据</span>
-        <span className="text-xs text-[#6B6B7B]/60">策略启动后约2分钟开始记录盈亏</span>
+        <span className="text-xs text-[#505C78]">策略启动后约2分钟开始记录盈亏</span>
       </div>
     )
   }
 
-  const chartData = data
+  const chartData = filteredData
     .map((r) => ({
       time: new Date(r.recorded_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
       pnl: r.total_pnl,
@@ -27,35 +44,63 @@ export default function PnLChart({ data }: PnLChartProps) {
     .reverse()
 
   const isPositive = chartData.length > 0 && chartData[chartData.length - 1].pnl >= 0
+  const accentColor = isPositive ? '#00D4AA' : '#FF4060'
 
-  return (
+  const chartContent = (
     <ResponsiveContainer width="100%" height="100%">
       <AreaChart data={chartData}>
         <defs>
           <linearGradient id="pnlGradient" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={isPositive ? '#00D4AA' : '#FF4757'} stopOpacity={0.2} />
-            <stop offset="100%" stopColor={isPositive ? '#00D4AA' : '#FF4757'} stopOpacity={0} />
+            <stop offset="0%" stopColor={accentColor} stopOpacity={0.25} />
+            <stop offset="50%" stopColor={accentColor} stopOpacity={0.08} />
+            <stop offset="100%" stopColor={accentColor} stopOpacity={0} />
           </linearGradient>
+          <filter id="pnlGlow">
+            <feGaussianBlur stdDeviation="2" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
         </defs>
-        <XAxis dataKey="time" axisLine={false} tickLine={false} tick={{ fill: '#6B6B7B', fontSize: 11 }} />
-        <YAxis axisLine={false} tickLine={false} tick={{ fill: '#6B6B7B', fontSize: 11 }} />
+        <XAxis dataKey="time" axisLine={false} tickLine={false} tick={{ fill: '#7B86A2', fontSize: 11 }} />
+        <YAxis axisLine={false} tickLine={false} tick={{ fill: '#7B86A2', fontSize: 11 }} />
         <Tooltip
           contentStyle={{
-            backgroundColor: '#14141A',
-            border: '1px solid #1E1E28',
-            borderRadius: '8px',
-            color: '#E8E8ED',
+            backgroundColor: 'rgba(10, 15, 30, 0.9)',
+            border: '1px solid rgba(0, 212, 170, 0.18)',
+            borderRadius: '10px',
+            color: '#EDF0F7',
             fontSize: '13px',
+            backdropFilter: 'blur(12px)',
+            boxShadow: '0 0 20px rgba(0, 212, 170, 0.1), 0 8px 24px rgba(0, 0, 0, 0.4)',
           }}
+          labelStyle={{ color: '#7B86A2', fontWeight: 500 }}
+          itemStyle={{ color: accentColor, fontWeight: 600 }}
         />
         <Area
           type="monotone"
           dataKey="pnl"
-          stroke={isPositive ? '#00D4AA' : '#FF4757'}
+          stroke={accentColor}
           strokeWidth={1.5}
           fill="url(#pnlGradient)"
+          filter="url(#pnlGlow)"
         />
       </AreaChart>
     </ResponsiveContainer>
   )
+
+  if (chartData.length > 50) {
+    return (
+      <div className="overflow-x-auto" style={{ width: '100%' }}>
+        <div style={{ minWidth: `${Math.max(chartData.length * 8, 100)}%`, height: '100%' }}>
+          {chartContent}
+        </div>
+      </div>
+    )
+  }
+
+  return chartContent
 }
+
+export default memo(PnLChart)

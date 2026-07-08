@@ -8,3 +8,7 @@ export function login(data: LoginRequest) {
 export function getMe() {
   return client.get('/auth/me')
 }
+
+export function changePassword(data: { old_password: string; new_password: string }) {
+  return client.put('/auth/password', data)
+}

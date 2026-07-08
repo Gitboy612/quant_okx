@@ -1,4 +1,4 @@
-interface Column<T> {
+﻿interface Column<T> {
   key: string
   header: string
   render?: (row: T) => React.ReactNode
@@ -18,21 +18,21 @@ export default function DataTable<T>({
 }: DataTableProps<T>) {
   if (data.length === 0) {
     return (
-      <div className="flex items-center justify-center py-12 text-[#6B6B7B] text-sm">
+      <div className="flex items-center justify-center py-12 text-[#7B86A2] text-sm">
         暂无数据
       </div>
     )
   }
 
   return (
-    <div className="overflow-x-auto">
+    <div className="overflow-x-auto glass-card rounded-xl">
       <table className="w-full text-sm">
         <thead>
-          <tr className="border-b border-[#1E1E28]">
+          <tr className="border-b border-[rgba(0,212,170,0.08)]">
             {columns.map((col) => (
               <th
                 key={col.key}
-                className={`text-left py-3 px-4 text-xs text-[#6B6B7B] font-medium tracking-wide uppercase ${col.className ?? ''}`}
+                className={`text-left py-3 px-4 text-[10px] text-[#7B86A2] font-semibold tracking-[0.12em] uppercase ${col.className ?? ''}`}
               >
                 {col.header}
               </th>
@@ -41,9 +41,9 @@ export default function DataTable<T>({
         </thead>
         <tbody>
           {data.map((row) => (
-            <tr key={String((row as Record<string, unknown>)[keyField])} className="border-b border-[#1E1E28]/50 hover:bg-[#1A1A24]/50 transition-colors">
+            <tr key={String((row as Record<string, unknown>)[keyField])} className="border-b border-[rgba(0,212,170,0.04)] hover:bg-[rgba(0,212,170,0.04)] transition-all duration-200 hover:shadow-[inset_0_0_30px_rgba(0,212,170,0.02)]">
               {columns.map((col) => (
-                <td key={col.key} className={`py-3 px-4 ${col.className ?? ''}`}>
+                <td key={col.key} className={`py-3 px-4 text-[#EDF0F7] ${col.className ?? ''}`}>
                   {col.render ? col.render(row) : String((row as Record<string, unknown>)[col.key] ?? '-')}
                 </td>
               ))}

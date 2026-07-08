@@ -41,7 +41,7 @@ class AdvancedGridHedgeStrategy(BaseStrategy):
                 continue
 
             try:
-                tickers = self.client.get_ticker(symbol)
+                tickers = await self.client.get_ticker(symbol)
                 if not tickers:
                     await asyncio.sleep(3)
                     continue
@@ -57,7 +57,7 @@ class AdvancedGridHedgeStrategy(BaseStrategy):
 
                 if change_pct >= y_pct and not hedged:
                     hedge_qty = order_qty * n_pct
-                    self.client.place_order(
+                    await self.client.place_order(
                         inst_id=symbol,
                         side="sell",
                         ord_type="market",
@@ -71,7 +71,7 @@ class AdvancedGridHedgeStrategy(BaseStrategy):
                     ref_price = current_price
 
                 elif change_pct <= -y_pct and hedged:
-                    self.client.place_order(
+                    await self.client.place_order(
                         inst_id=symbol,
                         side="buy",
                         ord_type="market",
@@ -84,14 +84,14 @@ class AdvancedGridHedgeStrategy(BaseStrategy):
                     )
                     ref_price = current_price
 
-                    positions = self.client.get_positions()
+                    positions = await self.client.get_positions()
                     if positions:
                         for pos in positions:
                             if pos.get("instId") == symbol:
                                 margin_ratio = float(pos.get("mgnRatio", "1"))
                                 if margin_ratio > 0.8:
                                     rescue_qty = safe_usdt / current_price
-                                    self.client.place_order(
+                                    await self.client.place_order(
                                         inst_id=symbol,
                                         side="buy",
                                         ord_type="market",
@@ -103,7 +103,7 @@ class AdvancedGridHedgeStrategy(BaseStrategy):
                                     )
                                     break
 
-                balances = self.client.get_balance()
+                balances = await self.client.get_balance()
                 if balances:
                     total_equity = float(balances.get("totalEq", "0"))
                     self.record_pnl(total_equity, 0, 0)

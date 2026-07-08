@@ -33,7 +33,7 @@ class TrendStrategy(BaseStrategy):
                 continue
 
             try:
-                candles = self.client.get_candles(symbol, bar="5m", limit=str(slow_period + 10))
+                candles = await self.client.get_candles(symbol, bar="5m", limit=str(slow_period + 10))
                 if not candles or len(candles) < slow_period:
                     await asyncio.sleep(5)
                     continue
@@ -52,7 +52,7 @@ class TrendStrategy(BaseStrategy):
                     signal = "sell"
 
                 if signal and signal != last_signal:
-                    self.client.place_order(
+                    await self.client.place_order(
                         inst_id=symbol,
                         side=signal,
                         ord_type="market",
@@ -62,7 +62,7 @@ class TrendStrategy(BaseStrategy):
                     self.record_order(symbol, signal, "market", current_price, order_qty)
                     last_signal = signal
 
-                balances = self.client.get_balance()
+                balances = await self.client.get_balance()
                 if balances:
                     total_equity = float(balances.get("totalEq", "0"))
                     self.record_pnl(total_equity, 0, 0)

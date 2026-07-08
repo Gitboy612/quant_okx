@@ -21,32 +21,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    const token = localStorage.getItem('token')
+    const token = sessionStorage.getItem('token')
     if (!token) {
       setLoading(false)
       return
     }
     getMe()
       .then((res) => setUser(res.data))
-      .catch(() => localStorage.removeItem('token'))
+      .catch(() => sessionStorage.removeItem('token'))
       .finally(() => setLoading(false))
   }, [])
 
   const login = async (token: string) => {
-    localStorage.setItem('token', token)
+    sessionStorage.setItem('token', token)
     setLoading(true)
     try {
       const res = await getMe()
       setUser(res.data)
     } catch {
-      localStorage.removeItem('token')
+      sessionStorage.removeItem('token')
     } finally {
       setLoading(false)
     }
   }
 
   const logout = () => {
-    localStorage.removeItem('token')
+    sessionStorage.removeItem('token')
     setUser(null)
   }
 

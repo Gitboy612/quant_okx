@@ -33,8 +33,8 @@ class ArbitrageStrategy(BaseStrategy):
                 continue
 
             try:
-                spot_ticker = self.client.get_ticker(spot_symbol)
-                futures_ticker = self.client.get_ticker(futures_symbol)
+                spot_ticker = await self.client.get_ticker(spot_symbol)
+                futures_ticker = await self.client.get_ticker(futures_symbol)
 
                 if not spot_ticker or not futures_ticker:
                     await asyncio.sleep(3)
@@ -46,25 +46,25 @@ class ArbitrageStrategy(BaseStrategy):
 
                 if not position_open and abs(spread_pct) > spread_threshold:
                     if spread_pct > 0:
-                        self.client.place_order(inst_id=futures_symbol, side="sell", ord_type="market", sz=str(order_qty))
-                        self.client.place_order(inst_id=spot_symbol, side="buy", ord_type="market", sz=str(order_qty))
+                        await self.client.place_order(inst_id=futures_symbol, side="sell", ord_type="market", sz=str(order_qty))
+                        await self.client.place_order(inst_id=spot_symbol, side="buy", ord_type="market", sz=str(order_qty))
                         self.record_order(futures_symbol, "sell", "market", futures_price, order_qty)
                         self.record_order(spot_symbol, "buy", "market", spot_price, order_qty)
                     else:
-                        self.client.place_order(inst_id=futures_symbol, side="buy", ord_type="market", sz=str(order_qty))
-                        self.client.place_order(inst_id=spot_symbol, side="sell", ord_type="market", sz=str(order_qty))
+                        await self.client.place_order(inst_id=futures_symbol, side="buy", ord_type="market", sz=str(order_qty))
+                        await self.client.place_order(inst_id=spot_symbol, side="sell", ord_type="market", sz=str(order_qty))
                         self.record_order(futures_symbol, "buy", "market", futures_price, order_qty)
                         self.record_order(spot_symbol, "sell", "market", spot_price, order_qty)
                     position_open = True
 
                 elif position_open and abs(spread_pct) < spread_threshold * 0.3:
-                    self.client.place_order(inst_id=futures_symbol, side="buy" if spread_pct > 0 else "sell", ord_type="market", sz=str(order_qty))
-                    self.client.place_order(inst_id=spot_symbol, side="sell" if spread_pct > 0 else "buy", ord_type="market", sz=str(order_qty))
+                    await self.client.place_order(inst_id=futures_symbol, side="buy" if spread_pct > 0 else "sell", ord_type="market", sz=str(order_qty))
+                    await self.client.place_order(inst_id=spot_symbol, side="sell" if spread_pct > 0 else "buy", ord_type="market", sz=str(order_qty))
                     self.record_order(futures_symbol, "buy", "market", futures_price, order_qty, status="close")
                     self.record_order(spot_symbol, "sell", "market", spot_price, order_qty, status="close")
                     position_open = False
 
-                balances = self.client.get_balance()
+                balances = await self.client.get_balance()
                 if balances:
                     total_equity = float(balances.get("totalEq", "0"))
                     self.record_pnl(total_equity, 0, 0)

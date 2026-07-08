@@ -1,5 +1,6 @@
 import asyncio
 import math
+import time
 import traceback
 from strategies.base_strategy import BaseStrategy
 
@@ -18,6 +19,82 @@ class GridStrategy(BaseStrategy):
             return False
         return True
 
+    async def _on_order_filled(self, order_info):
+        """Handle order fill event from OrderManager (WebSocket or REST fallback)."""
+        symbol = order_info.symbol
+        side = order_info.side
+        px = float(order_info.px) if order_info.px else 0
+        sz = float(order_info.sz) if order_info.sz else 0
+        ordId = order_info.ordId
+
+        # Find grid index by matching price
+        grid_idx = None
+        for i, level in enumerate(self._grid_levels):
+            price = round(round(level / self._grid_tick_size) * self._grid_tick_size, self._grid_tick_decimals)
+            if abs(price - px) < self._grid_tick_size * 0.6:
+                grid_idx = i
+                break
+
+        if grid_idx is None:
+            return
+
+        if side == "buy":
+            if grid_idx in self._active_buy_orders:
+                del self._active_buy_orders[grid_idx]
+            self.record_order(symbol, "buy", "limit", px, sz, order_id=ordId, status="filled")
+
+            sell_price = round(round((self._grid_levels[grid_idx] + self._grid_step) / self._grid_tick_size) * self._grid_tick_size, self._grid_tick_decimals)
+            sell_price_str = f"{sell_price:.{self._grid_tick_decimals}f}"
+            sell_resp = await self.client.place_order(
+                inst_id=symbol, side="sell", ord_type="limit",
+                sz=str(self._grid_order_qty), px=sell_price_str,
+            )
+            if sell_resp.get("code") == "0":
+                sell_ord_id = sell_resp.get("data", [{}])[0].get("ordId", "")
+                self._active_sell_orders[grid_idx + 1] = sell_ord_id
+                self.record_order(symbol, "sell", "limit", sell_price,
+                                  self._grid_order_qty, order_id=sell_ord_id, status="live")
+
+        elif side == "sell":
+            if grid_idx in self._active_sell_orders:
+                del self._active_sell_orders[grid_idx]
+
+            buy_px_for_pnl = self._grid_levels[grid_idx - 1] if grid_idx > 0 else self._grid_levels[grid_idx] - self._grid_step
+            cycle_pnl = (px - buy_px_for_pnl) * sz
+            self.add_realized_pnl(cycle_pnl)
+            self.record_order(symbol, "sell", "limit", px, sz, order_id=ordId, status="filled")
+
+            buy_price = round(round((self._grid_levels[grid_idx] - self._grid_step) / self._grid_tick_size) * self._grid_tick_size, self._grid_tick_decimals)
+            buy_price_str = f"{buy_price:.{self._grid_tick_decimals}f}"
+            buy_resp = await self.client.place_order(
+                inst_id=symbol, side="buy", ord_type="limit",
+                sz=str(self._grid_order_qty), px=buy_price_str,
+            )
+            if buy_resp.get("code") == "0":
+                buy_ord_id = buy_resp.get("data", [{}])[0].get("ordId", "")
+                self._active_buy_orders[grid_idx - 1] = buy_ord_id
+                self.record_order(symbol, "buy", "limit", buy_price,
+                                  self._grid_order_qty, order_id=buy_ord_id, status="live")
+
+    def _rebuild_active_dicts(self, symbol: str):
+        """Rebuild active_buy_orders and active_sell_orders from OrderManager."""
+        new_buy: dict[int, str] = {}
+        new_sell: dict[int, str] = {}
+        for order in self.order_manager.get_active_orders():
+            if order.symbol != symbol:
+                continue
+            px_val = float(order.px) if order.px else 0
+            for i, level in enumerate(self._grid_levels):
+                price = round(round(level / self._grid_tick_size) * self._grid_tick_size, self._grid_tick_decimals)
+                if abs(price - px_val) < self._grid_tick_size * 0.6:
+                    if order.side == "buy":
+                        new_buy[i] = order.ordId
+                    elif order.side == "sell":
+                        new_sell[i] = order.ordId
+                    break
+        self._active_buy_orders = new_buy
+        self._active_sell_orders = new_sell
+
     async def execute(self):
         try:
             if not await self.validate_params():
@@ -33,7 +110,7 @@ class GridStrategy(BaseStrategy):
             step = (upper - lower) / (grid_count - 1)
             grid_levels = [lower + i * step for i in range(grid_count)]
 
-            ticker = self.client.get_ticker(symbol)
+            ticker = await self.client.get_ticker(symbol)
             if not ticker:
                 self.update_status("error")
                 return
@@ -43,7 +120,7 @@ class GridStrategy(BaseStrategy):
 
             # Get initial equity once at start
             try:
-                balances = self.client.get_balance()
+                balances = await self.client.get_balance()
                 if balances:
                     self._initial_equity = float(balances.get("totalEq", "0"))
             except Exception:
@@ -68,13 +145,22 @@ class GridStrategy(BaseStrategy):
             tick_size = 0.1 if "-SWAP" in symbol else 0.01
             tick_decimals = 1 if "-SWAP" in symbol else 2
 
-            active_buy_orders: dict[int, str] = {}
-            active_sell_orders: dict[int, str] = {}
+            # Store grid data as instance variables for callback access
+            self._grid_levels = grid_levels
+            self._grid_step = step
+            self._grid_tick_size = tick_size
+            self._grid_tick_decimals = tick_decimals
+            self._grid_order_qty = order_qty
+            self._grid_symbol = symbol
+            self._active_buy_orders: dict[int, str] = {}
+            self._active_sell_orders: dict[int, str] = {}
+
+            # Register order fill callback
+            self.order_manager.on("filled", self._on_order_filled)
 
             # Sync existing orders from DB on restart
-            synced = self.sync_orders(symbol)
+            synced = await self.sync_orders(symbol)
             # Rebuild active orders from synced DB orders
-            # We need to map order_id back to grid index by matching price
             try:
                 from models.order import Order
                 db = self.db_session_factory()
@@ -86,16 +172,13 @@ class GridStrategy(BaseStrategy):
                     for o in live_orders:
                         if not o.order_id:
                             continue
-                        # Find grid index by matching price
                         for i, level in enumerate(grid_levels):
                             price = round(round(level / tick_size) * tick_size, tick_decimals)
                             if abs(price - (o.price or 0)) < tick_size * 0.6:
                                 if o.side == "buy":
-                                    active_buy_orders[i] = o.order_id
-                                    self.track_order(symbol, o.order_id)
+                                    self._active_buy_orders[i] = o.order_id
                                 elif o.side == "sell":
-                                    active_sell_orders[i] = o.order_id
-                                    self.track_order(symbol, o.order_id)
+                                    self._active_sell_orders[i] = o.order_id
                                 break
                 finally:
                     db.close()
@@ -120,15 +203,14 @@ class GridStrategy(BaseStrategy):
                     {"instId": symbol, "side": "buy", "ordType": "limit", "sz": str(order_qty), "px": o["px"]}
                     for o in batch
                 ]
-                resp = self.client.batch_place_orders(order_payloads)
+                resp = await self.client.batch_place_orders(order_payloads)
                 if resp.get("code") == "0":
                     for j, o in enumerate(batch):
                         try:
                             data = resp.get("data", [])
                             if j < len(data) and data[j].get("sCode") == "0":
                                 order_id = data[j].get("ordId", "")
-                                active_buy_orders[o["idx"]] = order_id
-                                self.track_order(symbol, order_id)
+                                self._active_buy_orders[o["idx"]] = order_id
                                 self.record_order(symbol, "buy", "limit", o["level"], order_qty, order_id=order_id, status="live")
                             else:
                                 s_code = data[j].get("sCode", "") if j < len(data) else ""
@@ -150,15 +232,14 @@ class GridStrategy(BaseStrategy):
                     {"instId": symbol, "side": "sell", "ordType": "limit", "sz": str(order_qty), "px": o["px"]}
                     for o in batch
                 ]
-                resp = self.client.batch_place_orders(order_payloads)
+                resp = await self.client.batch_place_orders(order_payloads)
                 if resp.get("code") == "0":
                     for j, o in enumerate(batch):
                         try:
                             data = resp.get("data", [])
                             if j < len(data) and data[j].get("sCode") == "0":
                                 order_id = data[j].get("ordId", "")
-                                active_sell_orders[o["idx"]] = order_id
-                                self.track_order(symbol, order_id)
+                                self._active_sell_orders[o["idx"]] = order_id
                                 self.record_order(symbol, "sell", "limit", o["level"], order_qty, order_id=order_id, status="live")
                             else:
                                 s_code = data[j].get("sCode", "") if j < len(data) else ""
@@ -179,7 +260,7 @@ class GridStrategy(BaseStrategy):
             self.update_status("error")
             return
 
-        last_check_price = current_price
+        last_rest_check = 0.0
 
         while self._running:
             if self._paused:
@@ -187,73 +268,43 @@ class GridStrategy(BaseStrategy):
                 continue
 
             try:
-                tickers = self.client.get_ticker(symbol)
+                tickers = await self.client.get_ticker(symbol)
                 if not tickers:
                     await asyncio.sleep(5)
                     continue
 
                 current_price = float(tickers[0]["last"])
 
-                filled_buy_indices = []
-                for i, order_id in list(active_buy_orders.items()):
-                    order_info = self.client.get_order(symbol, order_id)
-                    if order_info and order_info[0].get("state") == "filled":
-                        filled_buy_indices.append(i)
-                        self.untrack_order(order_id)
-                        buy_px = grid_levels[i]
-                        self.record_order(symbol, "buy", "limit", buy_px, order_qty, order_id=order_id, status="filled")
-                        sell_price = round(round((grid_levels[i] + step) / tick_size) * tick_size, tick_decimals)
-                        sell_price_str = f"{sell_price:.{tick_decimals}f}"
-                        sell_resp = self.client.place_order(
-                            inst_id=symbol, side="sell", ord_type="limit",
-                            sz=str(order_qty), px=sell_price_str,
-                        )
-                        if sell_resp.get("code") == "0":
-                            sell_ord_id = sell_resp.get("data", [{}])[0].get("ordId", "")
-                            active_sell_orders[i + 1] = sell_ord_id
-                            self.track_order(symbol, sell_ord_id)
-                            self.record_order(symbol, "sell", "limit", sell_price,
-                                              order_qty, order_id=sell_ord_id, status="live")
+                # Fallback REST polling every 15 seconds (if WebSocket is not available)
+                now = time.time()
+                if now - last_rest_check > 15:
+                    last_rest_check = now
+                    for order in self.order_manager.get_active_orders():
+                        if order.symbol != symbol:
+                            continue
+                        try:
+                            info = await self.client.get_order(symbol, order.ordId)
+                            if info and len(info) > 0:
+                                state = info[0].get("state", "")
+                                if state != order.state:
+                                    self.order_manager.update_order(
+                                        order.ordId,
+                                        state=state,
+                                        fillPx=info[0].get("fillPx", ""),
+                                        fillSz=info[0].get("fillSz", ""),
+                                        fee=info[0].get("fee", ""),
+                                    )
+                        except Exception:
+                            pass
 
-                for i in filled_buy_indices:
-                    if i in active_buy_orders:
-                        del active_buy_orders[i]
-
-                filled_sell_indices = []
-                for i, order_id in list(active_sell_orders.items()):
-                    order_info = self.client.get_order(symbol, order_id)
-                    if order_info and order_info[0].get("state") == "filled":
-                        filled_sell_indices.append(i)
-                        self.untrack_order(order_id)
-                        sell_px = grid_levels[i]
-                        # Calculate realized PnL: sell_price - buy_price
-                        # The corresponding buy was at grid_levels[i - 1]
-                        buy_px_for_pnl = grid_levels[i - 1] if i > 0 else grid_levels[i] - step
-                        cycle_pnl = (sell_px - buy_px_for_pnl) * order_qty
-                        self.add_realized_pnl(cycle_pnl)
-                        self.record_order(symbol, "sell", "limit", sell_px, order_qty, order_id=order_id, status="filled")
-                        buy_price = round(round((grid_levels[i] - step) / tick_size) * tick_size, tick_decimals)
-                        buy_price_str = f"{buy_price:.{tick_decimals}f}"
-                        buy_resp = self.client.place_order(
-                            inst_id=symbol, side="buy", ord_type="limit",
-                            sz=str(order_qty), px=buy_price_str,
-                        )
-                        if buy_resp.get("code") == "0":
-                            buy_ord_id = buy_resp.get("data", [{}])[0].get("ordId", "")
-                            active_buy_orders[i - 1] = buy_ord_id
-                            self.track_order(symbol, buy_ord_id)
-                            self.record_order(symbol, "buy", "limit", buy_price,
-                                              order_qty, order_id=buy_ord_id, status="live")
-
-                for i in filled_sell_indices:
-                    if i in active_sell_orders:
-                        del active_sell_orders[i]
+                # Rebuild active_buy_orders and active_sell_orders from OrderManager
+                self._rebuild_active_dicts(symbol)
 
                 # Calculate unrealized PnL from active buy orders
                 unrealized_pnl = 0.0
-                for idx in active_buy_orders:
-                    buy_price = grid_levels[idx]
-                    unrealized_pnl += (current_price - buy_price) * order_qty
+                for idx in self._active_buy_orders:
+                    buy_price = self._grid_levels[idx]
+                    unrealized_pnl += (current_price - buy_price) * self._grid_order_qty
 
                 realized_pnl = self.get_realized_pnl()
                 total_equity = self._initial_equity + realized_pnl + unrealized_pnl
@@ -264,8 +315,8 @@ class GridStrategy(BaseStrategy):
 
             await asyncio.sleep(3)
 
-        for _, order_id in {**active_buy_orders, **active_sell_orders}.items():
+        for _, order_id in {**self._active_buy_orders, **self._active_sell_orders}.items():
             try:
-                self.client.cancel_order(symbol, order_id)
+                await self.client.cancel_order(symbol, order_id)
             except Exception:
                 pass

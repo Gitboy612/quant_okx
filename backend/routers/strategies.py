@@ -254,7 +254,7 @@ async def start_instance(
     if instance.status == "running":
         raise HTTPException(status_code=400, detail="策略已在运行中")
 
-    feasibility = strategy_engine.check_feasibility(instance_id)
+    feasibility = await strategy_engine.check_feasibility(instance_id)
     if not feasibility.get("ok"):
         raise HTTPException(status_code=400, detail=feasibility.get("reason", "可行性检查未通过"))
 
@@ -275,11 +275,11 @@ async def start_instance(
 
 
 @router.get("/instances/{instance_id}/feasibility")
-def check_feasibility(
+async def check_feasibility(
     instance_id: int,
     user: User = Depends(get_current_user),
 ):
-    return strategy_engine.check_feasibility(instance_id)
+    return await strategy_engine.check_feasibility(instance_id)
 
 
 @router.get("/api-call-logs")

@@ -1,5 +1,5 @@
 import client from './client'
-import type { Account, BalanceData } from '../types'
+import type { Account, BalanceData, Position } from '../types'
 
 export function listAccounts() {
   return client.get<Account[]>('/accounts')
@@ -29,4 +29,8 @@ export function getAccountBalance(id: number) {
 
 export function getAccountBalanceCached(id: number) {
   return client.get<BalanceData>(`/accounts/${id}/balance/cached`)
+}
+
+export function getPositions(accountId: number) {
+  return client.get<Position[]>(`/accounts/${accountId}/positions`)
 }

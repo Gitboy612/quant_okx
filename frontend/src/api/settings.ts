@@ -10,7 +10,7 @@ export function saveSettings(data: Record<string, string>) {
 }
 
 export const getProxySettings = () => client.get('/settings/proxy')
-export const saveProxySettings = (data: { proxy_enabled?: boolean; proxy_url?: string }) =>
+export const saveProxySettings = (data: { proxy_enabled?: boolean; proxy_url?: string; proxy_embedded_port?: string }) =>
   client.put('/settings/proxy', data)
 export const testProxy = (proxy_url: string) =>
   client.post('/settings/proxy/test', { proxy_url })
@@ -21,3 +21,10 @@ export const importProxyConfig = (file: File) => {
     headers: { 'Content-Type': 'multipart/form-data' },
   })
 }
+
+export const getSampleConfigs = () => client.get('/settings/proxy/sample-configs')
+export const importSampleConfig = (path: string) => client.post('/settings/proxy/sample-configs/import', { path })
+
+export const getProxyStatus = () => client.get('/settings/proxy/status')
+export const startProxy = (data?: { config_path?: string; port?: number }) => client.post('/settings/proxy/start', data || {})
+export const stopProxy = () => client.post('/settings/proxy/stop')

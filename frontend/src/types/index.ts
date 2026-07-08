@@ -15,6 +15,16 @@ export interface AssetBalance {
   equity: number
 }
 
+export interface Position {
+  instId: string
+  posSide: string
+  pos: string
+  markPx: string
+  upl: string
+  avgPx: string
+  notionalUsd: string
+}
+
 export interface BalanceData {
   total_equity: number
   assets: AssetBalance[]
@@ -92,13 +102,20 @@ export interface Order {
   account_id: number
   symbol: string
   order_id: string | null
+  cl_ord_id: string | null
   side: string
   order_type: string
   price: number | null
   quantity: number
   filled_quantity: number
+  state: string | null
+  fill_px: number | null
+  fill_sz: number | null
+  fee: number | null
+  update_time: string | null
   status: string
   created_at: string
+  updated_at: string | null
 }
 
 export interface PnlRecord {
@@ -147,6 +164,32 @@ export interface LoginRequest {
 
 export interface UserSettings {
   refresh_interval: string
+}
+
+export interface ConnectivityTarget {
+  ok: boolean
+  latency_ms: number
+  message?: string
+}
+
+export interface ConnectivityResult {
+  google: ConnectivityTarget
+  github: ConnectivityTarget
+  okx: ConnectivityTarget
+}
+
+export interface ProxyStatus {
+  status: string
+  port: number
+  pid: number | null
+  started_at: string | null
+  uptime_seconds: number
+  connectivity?: ConnectivityResult
+}
+
+export interface SampleConfig {
+  name: string
+  path: string
 }
 
 export interface StrategyEvent {

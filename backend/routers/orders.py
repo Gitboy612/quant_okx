@@ -13,6 +13,7 @@ def list_orders(
     account_id: int | None = Query(None),
     strategy_instance_id: int | None = Query(None),
     symbol: str | None = Query(None),
+    status: str | None = Query(None, description="Filter by status: live, filled, canceled, partial_fill"),
     limit: int = Query(100, ge=1, le=1000),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -24,6 +25,15 @@ def list_orders(
         query = query.filter(Order.strategy_instance_id == strategy_instance_id)
     if symbol:
         query = query.filter(Order.symbol.ilike(f"%{symbol}%"))
+    if status:
+        status_map = {
+            "live": "live",
+            "filled": "filled",
+            "canceled": "canceled",
+            "partial_fill": "live",
+        }
+        db_status = status_map.get(status, status)
+        query = query.filter(Order.status == db_status)
 
     orders = query.order_by(Order.created_at.desc()).limit(limit).all()
     return [
@@ -33,13 +43,20 @@ def list_orders(
             "account_id": o.account_id,
             "symbol": o.symbol,
             "order_id": o.order_id,
+            "cl_ord_id": o.cl_ord_id,
             "side": o.side,
             "order_type": o.order_type,
             "price": o.price,
             "quantity": o.quantity,
             "filled_quantity": o.filled_quantity,
+            "state": o.state,
+            "fill_px": o.fill_px,
+            "fill_sz": o.fill_sz,
+            "fee": o.fee,
+            "update_time": o.update_time,
             "status": o.status,
             "created_at": o.created_at.isoformat() if o.created_at else None,
+            "updated_at": o.updated_at.isoformat() if o.updated_at else None,
         }
         for o in orders
     ]

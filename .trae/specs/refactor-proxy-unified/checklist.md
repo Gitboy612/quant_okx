@@ -1,0 +1,26 @@
+# Checklist
+
+- [x] `get_proxy_url()` 修复：移除节点端口错误逻辑，嵌入式代理返回 `http://127.0.0.1:{port}`
+- [x] 新增 `proxy_embedded_port` 设置项（默认 7890），`get_proxy_settings()` 返回该字段
+- [x] `save_proxy_settings()` 支持保存 `proxy_embedded_port`
+- [x] `_test_connectivity()` 同时测试 Google generate_204、GitHub、OKX API 三个目标
+- [x] 连通性结果结构为 `{google: {ok, latency_ms}, github: {ok, latency_ms}, okx: {ok, latency_ms, message}}`
+- [x] `test_proxy()` 返回多目标连通性结果
+- [x] `start_proxy()` 返回值 `connectivity` 包含三目标结果
+- [x] `GET /api/settings/proxy` 返回 `proxy_embedded_port` 字段
+- [x] `PUT /api/settings/proxy` 接受并保存 `proxy_embedded_port`
+- [x] 新增 `GET /api/settings/proxy/sample-configs` 返回 backend 下的示例配置文件
+- [x] 新增 `POST /api/settings/proxy/sample-configs/import` 支持按路径导入示例配置
+- [x] 前端 `ProxyStatus.connectivity` 类型为多目标结构
+- [x] 前端新增 `SampleConfig`、`ConnectivityResult` 类型定义
+- [x] 前端 `ProxySettings` 增加 `proxy_embedded_port` 字段
+- [x] 前端 `api/settings.ts` 新增 `getSampleConfigs()`、`importSampleConfig(path)`
+- [x] 前端 SettingsPage 合并为单一"代理"面板，移除"手动代理"+"嵌入式代理"双面板
+- [x] 前端"使用示例配置"按钮组调用 `getSampleConfigs()` 并可一键导入
+- [x] 前端三目标连通性指示器（Google/GitHub/OKX）显示绿/红圆点 + 延迟
+- [x] 前端 Google 不可达时显示"代理未真正翻墙"提示
+- [x] 前端"高级：手动指定外部代理"区为折叠式，嵌入式代理运行时禁用
+- [x] Python 语法检查通过（proxy_service.py, proxy_core.py, settings.py）
+- [x] 前端构建无报错（npm run build exit code 0）
+- [x] `backend/魔戒.net` 和 `backend/1772848370833.yml` 可被 `parse_clash_config` 正确解析返回节点
+- [x] `getSampleConfigs` 能返回 `魔戒.net` 和 `1772848370833.yml` 两个示例配置文件

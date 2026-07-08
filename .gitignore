@@ -20,3 +20,15 @@ Thumbs.db
 
 *.log
 logs/
+
+# Large files & third-party
+*.pdf
+FlClash-main/
+miner-animation/
+--brand-css
+
+# Data & config
+backend/data/
+backend/1772848370833.yml
+backend/*.net
+backend/*.yml

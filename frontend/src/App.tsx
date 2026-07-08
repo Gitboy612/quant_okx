@@ -1,5 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
-import { AnimatePresence } from 'framer-motion'
+import { AnimatePresence, motion } from 'framer-motion'
 import { AuthProvider, useAuth } from './hooks/useAuth'
 import Layout from './components/Layout'
 import LoginPage from './pages/LoginPage'
@@ -18,8 +18,8 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#0A0A0F]">
-        <div className="text-[#6B6B7B] text-sm">加载中...</div>
+      <div className="min-h-screen flex items-center justify-center bg-[#050711]">
+        <div className="w-8 h-8 border-2 border-[rgba(0,212,170,0.15)] border-t-[#00D4AA] rounded-full animate-spin" />
       </div>
     )
   }
@@ -31,13 +31,60 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
+/* Card stack transition: outgoing card shrinks back, incoming card slides forward */
+const cardVariants = {
+  initial: {
+    opacity: 0,
+    y: 30,
+    scale: 0.92,
+    rotateX: -2,
+    filter: 'blur(2px)',
+  },
+  animate: {
+    opacity: 1,
+    y: 0,
+    scale: 1,
+    rotateX: 0,
+    filter: 'blur(0px)',
+  },
+  exit: {
+    opacity: 0,
+    y: -20,
+    scale: 0.94,
+    rotateX: 2,
+    filter: 'blur(2px)',
+  },
+}
+
+const cardTransition = {
+  type: 'spring' as const,
+  stiffness: 300,
+  damping: 30,
+  mass: 0.8,
+}
+
+function PageCard({ children }: { children: React.ReactNode }) {
+  return (
+    <motion.div
+      variants={cardVariants}
+      transition={cardTransition}
+      style={{
+        transformOrigin: 'center top',
+        willChange: 'opacity, transform, filter',
+      }}
+    >
+      {children}
+    </motion.div>
+  )
+}
+
 function AnimatedRoutes() {
   const location = useLocation()
 
   return (
-    <AnimatePresence mode="wait">
+    <AnimatePresence mode="popLayout">
       <Routes location={location} key={location.pathname}>
-        <Route path="/login" element={<LoginPage />} />
+        <Route path="/login" element={<PageCard><LoginPage /></PageCard>} />
         <Route
           path="/"
           element={
@@ -47,14 +94,14 @@ function AnimatedRoutes() {
           }
         >
           <Route index element={<Navigate to="/dashboard" replace />} />
-          <Route path="dashboard" element={<DashboardPage />} />
-          <Route path="strategies" element={<StrategiesPage />} />
-          <Route path="orders" element={<OrdersPage />} />
-          <Route path="accounts" element={<AccountsPage />} />
-          <Route path="logs" element={<LogsPage />} />
-          <Route path="api-logs" element={<ApiLogsPage />} />
-          <Route path="monitoring" element={<MonitoringPage />} />
-          <Route path="settings" element={<SettingsPage />} />
+          <Route path="dashboard" element={<PageCard><DashboardPage /></PageCard>} />
+          <Route path="strategies" element={<PageCard><StrategiesPage /></PageCard>} />
+          <Route path="orders" element={<PageCard><OrdersPage /></PageCard>} />
+          <Route path="accounts" element={<PageCard><AccountsPage /></PageCard>} />
+          <Route path="logs" element={<PageCard><LogsPage /></PageCard>} />
+          <Route path="api-logs" element={<PageCard><ApiLogsPage /></PageCard>} />
+          <Route path="monitoring" element={<PageCard><MonitoringPage /></PageCard>} />
+          <Route path="settings" element={<PageCard><SettingsPage /></PageCard>} />
         </Route>
       </Routes>
     </AnimatePresence>

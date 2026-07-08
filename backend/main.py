@@ -14,6 +14,7 @@ from routers.logs import router as logs_router
 from routers.ws import router as ws_router
 from routers.settings import router as settings_router
 from routers.monitoring import router as monitoring_router
+from routers.market import router as market_router
 from services.strategy_engine import strategy_engine
 
 app = FastAPI(title="QuantOKX", version="1.0.0")
@@ -35,6 +36,7 @@ app.include_router(logs_router)
 app.include_router(ws_router)
 app.include_router(settings_router)
 app.include_router(monitoring_router)
+app.include_router(market_router)
 
 if FRONTEND_DIR.exists():
     app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="static")
