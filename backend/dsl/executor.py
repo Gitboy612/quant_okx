@@ -37,6 +37,9 @@ from dsl.schema import (
     ConditionRef,
     EventRef,
     IndicatorRef,
+    QSModelConfig,
+    RiskFilter,
+    resolve_variables,
 )
 from dsl.compiler import (
     FSM,
@@ -67,9 +70,12 @@ from dsl.blocks.actions import execute_action
 class ComposableStrategy(BaseStrategy):
     """可拼接策略执行器，作为 _strategy_map['composable'] 的实现。
 
-    从 ``self.params['dsl_config']`` 读取 DSL 配置，编译为 FSM，按状态机
-    驱动基础策略 Block（如 GridBlock）。本类只负责编排，具体行为由基础
-    策略钩子与积木库实现。
+    优先从 ``self.params['qs_model_config']`` 读取 QS-Model 四段式配置
+    （meta/params/logic/risk_filter），经 ``resolve_variables`` 解析
+    ``$params.xxx`` / ``$meta.xxx`` 变量引用后编译为 FSM；若未提供则
+    回退到旧的 ``self.params['dsl_config']`` 兼容路径。FSM 编译完成后
+    按状态机驱动基础策略 Block（如 GridBlock）。本类只负责编排，具体
+    行为由基础策略钩子与积木库实现。
 
     注意：基础策略 Block（GridBlock 等）不继承 BaseStrategy，构造时只接收
     策略专属参数（upper_price/lower_price/...），client/order_manager 等
@@ -94,18 +100,40 @@ class ComposableStrategy(BaseStrategy):
         self._active_rules: set[str] = set()
         # 缓存的最新价（每个 tick 刷新，供 on_start / 指标复用）
         self._last_price: float = 0.0
+        # QS-Model 风控段（若提供），供后续风控逻辑读取
+        self._risk_filter: RiskFilter | None = None
 
     # ============================================================
     # 参数校验
     # ============================================================
 
     async def validate_params(self) -> bool:
-        """校验 ``self.params['dsl_config']`` 配置合法性。"""
-        config = self.params.get("dsl_config")
-        if not config:
+        """校验 ``self.params['qs_model_config']`` 或 ``dsl_config`` 合法性。
+
+        - 若提供 ``qs_model_config``：解析为 ``QSModelConfig``，解析变量后
+          将 ``logic`` 段交给 ``DSLValidator`` 校验；
+        - 否则回退到旧的 ``dsl_config`` 路径，直接交给 ``DSLValidator``。
+        - 两者都缺失则返回 False。
+        """
+        qs_model_config = self.params.get("qs_model_config")
+        dsl_config = self.params.get("dsl_config")
+        if not qs_model_config and not dsl_config:
             return False
+
         try:
-            result = DSLValidator().validate(config)
+            if qs_model_config is not None:
+                qs_model = QSModelConfig.model_validate(qs_model_config)
+                # 收集 self.params 中与 qs_model.params 同名的实例参数覆盖
+                param_overrides: dict[str, Any] = {}
+                for key in qs_model.params:
+                    if key in self.params:
+                        param_overrides[key] = self.params[key]
+                dsl = resolve_variables(qs_model, param_overrides)
+                config_to_validate = dsl.model_dump()
+            else:
+                config_to_validate = dsl_config
+
+            result = DSLValidator().validate(config_to_validate)
         except Exception:
             return False
         return result.valid
@@ -114,16 +142,70 @@ class ComposableStrategy(BaseStrategy):
     # 主入口
     # ============================================================
 
+    def _resolve_dsl_config(self) -> StrategyDSL:
+        """从 ``self.params`` 解析出最终可执行的 ``StrategyDSL``。
+
+        - 优先读取 ``qs_model_config``：解析为 ``QSModelConfig``，收集
+          ``self.params`` 中与 ``qs_model.params`` 同名的实例参数作为
+          ``param_overrides``，调用 ``resolve_variables`` 替换
+          ``$params.xxx`` / ``$meta.xxx`` 引用；同时把 ``risk_filter``
+          保存到 ``self._risk_filter`` 供后续风控逻辑读取。
+        - 回退到旧的 ``dsl_config``：直接 ``StrategyDSL.model_validate``。
+        - 两者均缺失则抛出 ``ValueError``。
+
+        Returns:
+            解析后的 ``StrategyDSL`` 对象。
+
+        Raises:
+            ValueError: 既未提供 ``qs_model_config`` 也未提供 ``dsl_config``。
+            pydantic.ValidationError: 配置格式不合法。
+        """
+        qs_model_config = self.params.get("qs_model_config")
+        dsl_config = self.params.get("dsl_config")
+
+        if qs_model_config:
+            qs_model = QSModelConfig.model_validate(qs_model_config)
+            # 收集实例参数覆盖（self.params 中与 qs_model.params 同名的键）
+            param_overrides: dict[str, Any] = {}
+            for key in qs_model.params:
+                if key in self.params:
+                    param_overrides[key] = self.params[key]
+            # 保存 risk_filter 供后续风控逻辑读取
+            if qs_model.risk_filter is not None:
+                self._risk_filter = qs_model.risk_filter
+                self._record_event(
+                    "info",
+                    "ComposableStrategy: 已加载 QS-Model risk_filter",
+                    {
+                        "max_position_ratio": qs_model.risk_filter.max_position_ratio,
+                        "daily_max_loss": qs_model.risk_filter.daily_max_loss,
+                        "min_trade_size": qs_model.risk_filter.min_trade_size,
+                    },
+                )
+            return resolve_variables(qs_model, param_overrides)
+
+        if dsl_config:
+            return StrategyDSL.model_validate(dsl_config)
+
+        raise ValueError("策略缺少 qs_model_config 或 dsl_config")
+
     async def execute(self):
-        """主入口：编译 DSL → 启动基础策略 → FSM 主循环。"""
-        # 1. 读取并校验 DSL 配置
-        config = self.params.get("dsl_config")
-        if not config:
-            self._record_event("error", "ComposableStrategy: 缺少 dsl_config 参数")
+        """主入口：解析配置 → 校验 → 编译 FSM → 启动基础策略 → FSM 主循环。"""
+        # 1. 解析配置（QS-Model 优先，回退到 dsl_config）
+        try:
+            self._dsl = self._resolve_dsl_config()
+        except ValueError as e:
+            self._record_event("error", f"ComposableStrategy: {e}")
+            return
+        except Exception as e:
+            self._record_event(
+                "error", f"ComposableStrategy: 配置解析失败 {e}"
+            )
             return
 
+        # 2. 校验 DSL（用解析后的 dsl 做 schema + 语义校验）
         try:
-            result = DSLValidator().validate(config)
+            result = DSLValidator().validate(self._dsl.model_dump())
         except Exception as e:
             self._record_event("error", f"ComposableStrategy: 校验异常 {e}")
             return
@@ -135,18 +217,17 @@ class ComposableStrategy(BaseStrategy):
             )
             return
 
-        # 2. 编译为 FSM
+        # 3. 编译为 FSM
         try:
-            self._dsl = StrategyDSL.model_validate(config)
             self._fsm = FSMCompiler().compile(self._dsl)
         except Exception as e:
             self._record_event("error", f"ComposableStrategy: FSM 编译失败 {e}")
             return
 
-        # 3. 构建 rule_name -> Rule 映射（用于冷却查询）
+        # 4. 构建 rule_name -> Rule 映射（用于冷却查询）
         self._rule_map = {rule.name: rule for rule in self._dsl.rules}
 
-        # 4. 实例化基础策略 Block（GridBlock 等只接收策略专属参数）
+        # 5. 实例化基础策略 Block（GridBlock 等只接收策略专属参数）
         base_kind = self._dsl.base_strategy.kind
         base_cls = base_strategy_registry.get(base_kind)
         if base_cls is None:
@@ -162,7 +243,7 @@ class ComposableStrategy(BaseStrategy):
             )
             return
 
-        # 5. 启动：标记运行、刷新最新价、构建初始 ctx、挂初始网格、绑定事件
+        # 6. 启动：标记运行、刷新最新价、构建初始 ctx、挂初始网格、绑定事件
         self._running = True
         self._paused = False
 
@@ -180,7 +261,7 @@ class ComposableStrategy(BaseStrategy):
 
         self._record_event("started", "ComposableStrategy 已启动，进入 FSM 主循环")
 
-        # 6. FSM 主循环
+        # 7. FSM 主循环
         tick_interval = float(self.params.get("tick_interval", 3.0))
         current_state = self._fsm.initial_state  # "RUNNING"
 

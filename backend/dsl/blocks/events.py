@@ -51,8 +51,9 @@ class OnTick(Event):
     """每个 tick 都触发的高频评估事件。"""
 
     category = "行情·事件"
+    label = "行情更新"
     description = "每个 tick 触发，返回当前时间戳与最新价"
-    param_schema = {"symbol": {"type": "str", "required": False}}
+    param_schema = {"symbol": {"type": "str", "label": "交易对", "required": False}}
     priority = "P0"
 
     async def check(self, ctx: ExecutionContext) -> dict | None:
@@ -70,8 +71,9 @@ class OnInterval(Event):
     """
 
     category = "定时"
+    label = "定时触发"
     description = "每隔 seconds 秒触发一次"
-    param_schema = {"seconds": {"type": "float", "required": True}}
+    param_schema = {"seconds": {"type": "float", "label": "间隔秒数", "unit": "秒", "required": True}}
     priority = "P0"
 
     def __init__(self, **args: Any) -> None:
@@ -96,10 +98,17 @@ class OnOrderFilled(Event):
     """
 
     category = "订单·事件"
+    label = "订单成交"
     description = "订单成交时触发，可按 side/symbol 过滤"
     param_schema = {
-        "side": {"type": "str", "required": False},
-        "symbol": {"type": "str", "required": False},
+        "side": {
+            "type": "select",
+            "label": "买卖方向",
+            "options": ["buy", "sell"],
+            "option_labels": ["买入", "卖出"],
+            "required": False,
+        },
+        "symbol": {"type": "str", "label": "交易对", "required": False},
     }
     priority = "P0"
 
@@ -143,10 +152,11 @@ class OnMarginWarning(Event):
     """保证金率低于阈值时触发的事件。"""
 
     category = "持仓·事件"
+    label = "保证金预警"
     description = "持仓保证金率低于阈值时触发"
     param_schema = {
-        "symbol": {"type": "str", "required": True},
-        "threshold": {"type": "float", "required": False, "default": 0.5},
+        "symbol": {"type": "str", "label": "交易对", "required": True},
+        "threshold": {"type": "float", "label": "保证金率阈值", "unit": "保证金率", "required": False, "default": 0.5},
     }
     priority = "P0"
 
@@ -185,6 +195,7 @@ class OnStrategyError(Event):
     """
 
     category = "策略·生命周期"
+    label = "策略异常"
     description = "策略抛出异常时触发（一次性消费）"
     param_schema = {}
     priority = "P0"

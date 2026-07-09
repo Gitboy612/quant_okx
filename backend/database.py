@@ -25,6 +25,24 @@ def _migrate_strategy_templates_dsl_config():
     if "dsl_config" not in existing_columns:
         with engine.begin() as conn:
             conn.execute(text("ALTER TABLE strategy_templates ADD COLUMN dsl_config JSON"))
+    # QS-Model v2.0 扩展列
+    if "qs_model_config" not in existing_columns:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE strategy_templates ADD COLUMN qs_model_config JSON"))
+    if "logic_hash" not in existing_columns:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE strategy_templates ADD COLUMN logic_hash VARCHAR"))
+
+
+def _migrate_strategy_instances_logic_hash():
+    """确保 strategy_instances 表包含 logic_hash 列（向后兼容迁移）。"""
+    insp = inspect(engine)
+    if "strategy_instances" not in insp.get_table_names():
+        return
+    existing_columns = {c["name"] for c in insp.get_columns("strategy_instances")}
+    if "logic_hash" not in existing_columns:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE strategy_instances ADD COLUMN logic_hash VARCHAR"))
 
 
 def init_db():
@@ -41,6 +59,7 @@ def init_db():
 
     Base.metadata.create_all(bind=engine)
     _migrate_strategy_templates_dsl_config()
+    _migrate_strategy_instances_logic_hash()
 
 
 def get_db():

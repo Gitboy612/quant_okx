@@ -1,5 +1,6 @@
 import client from './client'
 import type { StrategyTemplate, StrategyInstance, FeasibilityResult, ApiCallLogItem } from '../types'
+import type { QSModelConfig } from '../types/dsl'
 
 export function listInstances() {
   return client.get<StrategyInstance[]>('/strategies/instances')
@@ -24,6 +25,8 @@ export function createTemplate(data: {
   default_params: Record<string, unknown>
   param_schema: Record<string, unknown> | null
   dsl_config?: Record<string, unknown> | null
+  qs_model_config?: QSModelConfig
+  force?: boolean
 }) {
   return client.post<StrategyTemplate>('/strategies/templates', data)
 }

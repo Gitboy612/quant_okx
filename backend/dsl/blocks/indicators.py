@@ -49,11 +49,12 @@ class PriceLast:
     """最新价指标。"""
 
     category = "行情·价格"
+    label = "最新价"
     description = "获取指定交易对的最新成交价"
     output_type = float
     priority = "P0"
     param_schema = {
-        "symbol": {"type": "string", "required": True, "description": "交易对，如 BTC-USDT"},
+        "symbol": {"type": "string", "label": "交易对", "required": True, "description": "交易对，如 BTC-USDT"},
     }
 
     def __init__(self, **args):
@@ -72,12 +73,21 @@ class PriceChangePct:
     """价格涨跌幅指标（指定窗口）。"""
 
     category = "行情·价格"
+    label = "涨跌幅"
     description = "计算指定时间窗口内的价格涨跌幅（小数，0.05=5%）"
     output_type = float
     priority = "P0"
     param_schema = {
-        "window": {"type": "string", "required": True, "description": "时间窗口，如 1h/5m/1d"},
-        "symbol": {"type": "string", "required": True, "description": "交易对"},
+        "window": {
+            "type": "select",
+            "label": "时间窗口",
+            "required": True,
+            "options": ["1m", "5m", "15m", "1h", "4h", "1d"],
+            "option_labels": ["1分钟", "5分钟", "15分钟", "1小时", "4小时", "1天"],
+            "default": "1h",
+            "description": "K线时间窗口",
+        },
+        "symbol": {"type": "string", "label": "交易对", "required": True, "description": "交易对"},
     }
 
     def __init__(self, **args):
@@ -120,12 +130,13 @@ class RSI:
     """RSI 相对强弱指标（标准 Wilder 平滑）。"""
 
     category = "行情·技术指标"
+    label = "RSI"
     description = "计算 RSI 指标（Wilder 平滑），返回 [0, 100]"
     output_type = float
     priority = "P0"
     param_schema = {
-        "period": {"type": "integer", "required": True, "description": "RSI 周期，如 14"},
-        "symbol": {"type": "string", "required": True, "description": "交易对"},
+        "period": {"type": "integer", "label": "RSI周期", "required": True, "description": "RSI 周期，如 14"},
+        "symbol": {"type": "string", "label": "交易对", "required": True, "description": "交易对"},
     }
 
     def __init__(self, **args):
@@ -189,11 +200,12 @@ class PositionQty:
     """持仓量指标。"""
 
     category = "账户·持仓"
+    label = "持仓数量"
     description = "获取指定交易对的持仓量（正多负空）"
     output_type = float
     priority = "P0"
     param_schema = {
-        "symbol": {"type": "string", "required": True, "description": "交易对"},
+        "symbol": {"type": "string", "label": "交易对", "required": True, "description": "交易对"},
     }
 
     def __init__(self, **args):
@@ -218,11 +230,12 @@ class PositionPnl:
     """持仓未实现盈亏指标。"""
 
     category = "账户·持仓"
+    label = "持仓盈亏"
     description = "获取指定交易对持仓的未实现盈亏（upl）"
     output_type = float
     priority = "P0"
     param_schema = {
-        "symbol": {"type": "string", "required": True, "description": "交易对"},
+        "symbol": {"type": "string", "label": "交易对", "required": True, "description": "交易对"},
     }
 
     def __init__(self, **args):
@@ -247,6 +260,7 @@ class AccountEquity:
     """账户净值指标。"""
 
     category = "账户·持仓"
+    label = "账户净值"
     description = "获取账户总净值（totalEq）"
     output_type = float
     priority = "P0"
@@ -275,6 +289,7 @@ class RealizedPnl:
     """已实现盈亏指标（来自执行器同步的 ctx.realized_pnl）。"""
 
     category = "策略·内部状态"
+    label = "已实现盈亏"
     description = "策略已实现盈亏（由执行器从 strategy._realized_pnl 同步）"
     output_type = float
     priority = "P0"
@@ -295,11 +310,12 @@ class UnrealizedPnl:
     """
 
     category = "策略·内部状态"
+    label = "未实现盈亏"
     description = "未实现盈亏（优先用持仓 upl，无持仓返回 0.0）"
     output_type = float
     priority = "P0"
     param_schema = {
-        "symbol": {"type": "string", "required": False, "description": "交易对，默认用 ctx.symbol"},
+        "symbol": {"type": "string", "label": "交易对", "required": False, "description": "交易对，默认用 ctx.symbol"},
     }
 
     def __init__(self, **args):

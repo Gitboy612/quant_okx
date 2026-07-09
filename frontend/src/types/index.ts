@@ -1,3 +1,5 @@
+import type { QSModelConfig } from './dsl'
+
 export interface Account {
   id: number
   name: string
@@ -78,6 +80,9 @@ export interface StrategyTemplate {
   is_builtin: boolean
   is_custom: boolean
   dsl_config: Record<string, unknown> | null
+  qs_model_config?: QSModelConfig | null  // QS-Model 配置
+  logic_hash?: string | null              // 逻辑哈希（去重标识）
+  duplicate_hint?: string | null          // 创建时返回的去重提示
 }
 
 export interface StrategyInstance {

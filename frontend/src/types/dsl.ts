@@ -1,21 +1,28 @@
 // 积木元数据（对应 Registry.list() 返回项）
 export interface BlockMeta {
   kind: string
+  label?: string          // 中文显示名
   category: string
   description: string
   param_schema: Record<string, BlockParamSchema>
   output_type: string  // "float" / "int" / "dict" / "bool" 等（后端已转为字符串）
   priority: string      // "P0" / "P1" / "P2"
+  display_template?: string  // 条件可视化模板
 }
 
 export interface BlockParamSchema {
-  type: 'string' | 'number' | 'bool' | 'select'
+  type: 'string' | 'number' | 'bool' | 'select' | 'integer'
+  label?: string           // 中文字段名
   required?: boolean
   default?: unknown
   min?: number
   max?: number
+  step?: number
   description?: string
   options?: string[]  // for select type
+  option_labels?: string[]  // 选项中文标签
+  unit?: string              // 单位
+  range?: [number, number]   // 取值范围
 }
 
 // 积木目录（GET /api/dsl/blocks 响应）
@@ -99,4 +106,46 @@ export interface DryRunRequest {
   symbol: string
   bar?: string
   limit?: number
+}
+
+// ===== QS-Model 配置 =====
+
+// QS-Model 元信息
+export interface QSModelMeta {
+  name: string
+  version: string
+  author: string
+  description: string
+  asset_class: string
+  frequency: string
+  base_symbol: string
+}
+
+// QS-Model 参数定义
+export interface ParamDefinition {
+  label: string
+  value: any
+  type: 'int' | 'float' | 'string' | 'bool' | 'select'
+  range?: [number, number]
+  description?: string
+  options?: any[]
+  option_labels?: string[]
+  unit?: string
+}
+
+// 风控过滤
+export interface RiskFilter {
+  max_position_ratio?: number
+  daily_max_loss?: number
+  min_trade_size?: number
+  blacklist_hours?: string[]
+}
+
+// QS-Model 完整配置（logic 字段复用现有 DslConfig 类型）
+export interface QSModelConfig {
+  qs_model_version: string
+  meta: QSModelMeta
+  params: Record<string, ParamDefinition>
+  logic: DslConfig
+  risk_filter?: RiskFilter | null
 }

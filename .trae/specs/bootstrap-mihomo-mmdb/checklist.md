@@ -1,0 +1,21 @@
+# Checklist
+
+- [x] `proxy_core.py` 中定义了 `MMDB_FILES` 常量，包含 4 个必需文件及其 GitHub 下载 URL
+- [x] `_get_mmdb_dir()` 返回 `backend/data/` 目录（与 mihomo 工作目录一致）
+- [x] `_download_mmdb_files()` 复用 `_wrap_with_mirrors()` 镜像兜底逻辑，逐文件尝试下载
+- [x] `_check_mmdb_ready()` 返回各文件的存在状态、大小、修改时间
+- [x] `_print_mmdb_manual_hint()` 输出中文手动放置指引
+- [x] `start_proxy()` 在启动 mihomo 前检查 MMDB 是否就绪，缺失时先预下载
+- [x] MMDB 仍缺失且无引导代理时，返回错误信息并**不启动 mihomo**（避免死锁）
+- [x] `start_proxy()` 支持传入 `bootstrap_proxy` 参数，设置 `HTTP_PROXY` / `HTTPS_PROXY` 环境变量给 mihomo 子进程
+- [x] 错误返回结构包含 `mmdb_status` 字段
+- [x] `routers/settings.py` 新增 `GET /api/settings/proxy/mmdb-status` 接口
+- [x] `SettingsPage.tsx` 增加"引导代理地址"输入框（可选）
+- [x] 启动代理请求体包含 `bootstrap_proxy` 字段
+- [x] 嵌入式代理面板展示 MMDB 4 个文件的就绪状态
+- [x] 启动失败且返回 `mmdb_status` 时，前端展示缺失文件清单与手动放置指引
+- [x] Python 语法检查通过（`proxy_core.py` 与 `settings.py`）
+- [x] TypeScript 编译通过（`npx tsc --noEmit` exit code 0）
+- [ ] 手动删除 MMDB 文件后启动代理，验证预下载流程正常工作（需用户实际测试）
+- [ ] 配置引导代理后启动，验证 mihomo 能通过引导代理下载 MMDB（需用户实际测试）
+- [ ] MMDB 已存在时启动流程跳过下载，启动延迟显著降低（需用户实际测试）

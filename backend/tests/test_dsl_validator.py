@@ -216,10 +216,13 @@ def test_invalid_missing_base_strategy():
 
 
 def test_unknown_base_strategy_kind():
-    """base_strategy.kind="martingale" 未注册 → UNKNOWN_KIND。"""
+    """base_strategy.kind="nonexistent_strategy" 未注册 → UNKNOWN_KIND。
+
+    注意：martingale/trend/dca 等已注册为 DSL 基础策略，故使用一个确定未注册的 kind。
+    """
     config = {
         "version": "1.0",
-        "base_strategy": {"kind": "martingale", "params": {}},
+        "base_strategy": {"kind": "nonexistent_strategy", "params": {}},
         "rules": [],
     }
     result = _validate(config)

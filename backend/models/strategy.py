@@ -15,7 +15,9 @@ class StrategyTemplate(Base):
     is_builtin = Column(Boolean, default=False)
     is_custom = Column(Boolean, default=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    dsl_config = Column(JSON, nullable=True)  # 可拼接策略的 DSL 配置；NULL 表示传统硬编码策略
+    dsl_config = Column(JSON, nullable=True)  # 可拼接策略的 DSL 配置；NULL 表示传统硬编码策略（向后兼容）
+    qs_model_config = Column(JSON, nullable=True)  # QS-Model v2.0 完整配置（四段式复合结构）
+    logic_hash = Column(String, nullable=True, index=True)  # logic 段 SHA-256，用于重复逻辑去重
 
 
 class StrategyInstance(Base):
@@ -33,3 +35,4 @@ class StrategyInstance(Base):
     stopped_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    logic_hash = Column(String, nullable=True)  # 创建实例时的逻辑版本快照

@@ -25,11 +25,12 @@ class PauseOrders:
     """暂停挂单：撤挂单但保留持仓。"""
 
     category = "策略控制"
+    label = "暂停挂单"
     description = "暂停策略挂单（撤挂单但保留持仓），优先调用基础策略 on_pause 钩子"
     param_schema = {
         "type": "object",
         "properties": {
-            "symbol": {"type": "string", "description": "交易对，默认取 ctx.symbol"},
+            "symbol": {"type": "string", "label": "交易对", "description": "交易对，默认取 ctx.symbol"},
         },
     }
     priority = "P0"
@@ -52,11 +53,12 @@ class ResumeOrders:
     """恢复挂单：重新挂网格。"""
 
     category = "策略控制"
+    label = "恢复挂单"
     description = "恢复策略挂单（重新挂网格），调用基础策略 on_resume 钩子"
     param_schema = {
         "type": "object",
         "properties": {
-            "symbol": {"type": "string", "description": "交易对，默认取 ctx.symbol"},
+            "symbol": {"type": "string", "label": "交易对", "description": "交易对，默认取 ctx.symbol"},
         },
     }
     priority = "P0"
@@ -75,6 +77,7 @@ class HoldPosition:
     """保持当前持仓：仅记录事件，无其他副作用。"""
 
     category = "策略控制"
+    label = "持有不动"
     description = "保持当前持仓不动，仅记录事件"
     param_schema = {"type": "object", "properties": {}}
     priority = "P0"
@@ -94,13 +97,21 @@ class RebalancePosition:
     """再平衡持仓：将实际持仓拉到理论持仓。"""
 
     category = "持仓"
+    label = "调仓"
     description = "再平衡持仓至理论持仓，按 mode 抹平差值（市价单）"
     param_schema = {
         "type": "object",
         "properties": {
-            "symbol": {"type": "string", "description": "交易对，默认取 ctx.symbol"},
-            "mode": {"type": "string", "description": "再平衡模式，默认 to_theoretical"},
-            "target": {"type": "number", "description": "目标持仓（mode=to_target 时使用）"},
+            "symbol": {"type": "string", "label": "交易对", "description": "交易对，默认取 ctx.symbol"},
+            "mode": {
+                "type": "select",
+                "label": "再平衡模式",
+                "options": ["to_theoretical", "to_target", "from_zero"],
+                "option_labels": ["到理论持仓", "到目标持仓", "从零开始"],
+                "default": "to_theoretical",
+                "description": "再平衡模式，默认 to_theoretical",
+            },
+            "target": {"type": "number", "label": "目标持仓", "description": "目标持仓（mode=to_target 时使用）"},
         },
     }
     priority = "P0"
@@ -181,15 +192,28 @@ class PlaceOrder:
     """下单：调用 OKX 客户端 place_order。"""
 
     category = "订单"
+    label = "下单"
     description = "下一笔订单（市价或限价）"
     param_schema = {
         "type": "object",
         "properties": {
-            "symbol": {"type": "string", "description": "交易对"},
-            "side": {"type": "string", "description": "买卖方向 buy/sell"},
-            "type": {"type": "string", "description": "订单类型 market/limit"},
-            "qty": {"type": "number", "description": "数量"},
-            "price": {"type": "number", "description": "价格（限价单必填）"},
+            "symbol": {"type": "string", "label": "交易对", "description": "交易对"},
+            "side": {
+                "type": "select",
+                "label": "买卖方向",
+                "options": ["buy", "sell"],
+                "option_labels": ["买入", "卖出"],
+                "description": "买卖方向 buy/sell",
+            },
+            "type": {
+                "type": "select",
+                "label": "订单类型",
+                "options": ["market", "limit"],
+                "option_labels": ["市价", "限价"],
+                "description": "订单类型 market/limit",
+            },
+            "qty": {"type": "number", "label": "数量", "description": "数量"},
+            "price": {"type": "number", "label": "价格", "description": "价格（限价单必填）"},
         },
         "required": ["symbol", "side", "type", "qty"],
     }
@@ -225,11 +249,12 @@ class CancelAll:
     """撤销指定 symbol 的所有挂单。"""
 
     category = "订单"
+    label = "撤销全部"
     description = "撤销指定交易对的所有挂单"
     param_schema = {
         "type": "object",
         "properties": {
-            "symbol": {"type": "string", "description": "交易对，默认取 ctx.symbol"},
+            "symbol": {"type": "string", "label": "交易对", "description": "交易对，默认取 ctx.symbol"},
         },
     }
     priority = "P0"
@@ -255,13 +280,21 @@ class LogEvent:
     """记录事件到 StrategyEvent 表。"""
 
     category = "通知"
+    label = "记录事件"
     description = "记录一条 DSL 事件到 StrategyEvent 表"
     param_schema = {
         "type": "object",
         "properties": {
-            "level": {"type": "string", "description": "级别 info/warn/error/critical，默认 info"},
-            "message": {"type": "string", "description": "事件消息"},
-            "details": {"type": "object", "description": "附加详情"},
+            "level": {
+                "type": "select",
+                "label": "日志级别",
+                "options": ["info", "warn", "error", "critical"],
+                "option_labels": ["信息", "警告", "错误", "严重"],
+                "default": "info",
+                "description": "级别 info/warn/error/critical，默认 info",
+            },
+            "message": {"type": "string", "label": "事件消息", "description": "事件消息"},
+            "details": {"type": "object", "label": "附加详情", "description": "附加详情"},
         },
         "required": ["message"],
     }

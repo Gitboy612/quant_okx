@@ -263,7 +263,7 @@ export default function StrategiesPage() {
             onClick={() => setShowDslEditor(true)}
             className="flex items-center gap-2 border border-[#1E1E28] text-[#E8E8ED] rounded-lg px-4 py-2 text-sm font-medium hover:bg-[#1A1A24] transition-colors"
           >
-            <Blocks className="w-4 h-4" /> DSL 拼接模板
+            <Blocks className="w-4 h-4" /> QS-Model 策略构建
           </button>
           <button
             onClick={openCreateModal}

@@ -1,3 +1,6 @@
+import hashlib
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from sqlalchemy.orm import Session
 from database import get_db
@@ -11,23 +14,60 @@ from middleware.auth import get_current_user
 router = APIRouter(prefix="/api/strategies", tags=["strategies"])
 
 
+def _compute_logic_hash(qs_model_config: dict | None, dsl_config: dict | None) -> str | None:
+    """计算 logic 段的 SHA-256 哈希。
+
+    优先使用 qs_model_config.logic，回退到 dsl_config（向后兼容）。
+    使用 sort_keys=True 规范化 JSON，确保相同内容产生相同哈希。
+    """
+    logic_source: dict | None = None
+    if qs_model_config:
+        logic_source = qs_model_config.get("logic", {}) or {}
+    elif dsl_config:
+        logic_source = dsl_config
+    if logic_source is None:
+        return None
+    canonical_json = json.dumps(logic_source, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+
+
+def _serialize_template(template: StrategyTemplate, duplicate_hint: str | None = None) -> dict:
+    """序列化模板为响应 dict。
+
+    若 qs_model_config 为空但 dsl_config 非空，自动包装为 QS-Model 结构（读取兼容）。
+    """
+    if template.qs_model_config:
+        qs_config = template.qs_model_config
+    elif template.dsl_config:
+        qs_config = {
+            "qs_model_version": "2.0",
+            "meta": {"name": template.name, "base_symbol": ""},
+            "params": {},
+            "logic": template.dsl_config,
+            "risk_filter": None,
+        }
+    else:
+        qs_config = None
+    return {
+        "id": template.id,
+        "name": template.name,
+        "strategy_type": template.strategy_type,
+        "description": template.description,
+        "default_params": template.default_params,
+        "param_schema": template.param_schema,
+        "is_builtin": template.is_builtin,
+        "is_custom": template.is_custom,
+        "dsl_config": template.dsl_config,
+        "qs_model_config": qs_config,
+        "logic_hash": template.logic_hash,
+        "duplicate_hint": duplicate_hint,
+    }
+
+
 @router.get("/templates")
 def list_templates(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     templates = db.query(StrategyTemplate).all()
-    return [
-        {
-            "id": t.id,
-            "name": t.name,
-            "strategy_type": t.strategy_type,
-            "description": t.description,
-            "default_params": t.default_params,
-            "param_schema": t.param_schema,
-            "is_builtin": t.is_builtin,
-            "is_custom": t.is_custom,
-            "dsl_config": t.dsl_config,
-        }
-        for t in templates
-    ]
+    return [_serialize_template(t) for t in templates]
 
 
 @router.post("/templates")
@@ -44,6 +84,31 @@ def create_template(
     if existing:
         raise HTTPException(status_code=400, detail="同名自定义模板已存在")
 
+    # 计算 logic 段哈希：优先 qs_model_config.logic，回退 dsl_config（向后兼容）
+    logic_hash = _compute_logic_hash(body.qs_model_config, body.dsl_config)
+
+    # 重复逻辑去重提示：若已有相同 logic_hash 的模板且未强制创建，返回提示而不落库
+    if logic_hash is not None and not body.force:
+        dup = db.query(StrategyTemplate).filter(
+            StrategyTemplate.logic_hash == logic_hash,
+        ).first()
+        if dup:
+            hint = f"检测到已有相同逻辑的模板『{dup.name}』，是否仍要创建？"
+            return {
+                "id": None,
+                "name": body.name,
+                "strategy_type": body.strategy_type,
+                "description": body.description,
+                "default_params": body.default_params,
+                "param_schema": body.param_schema,
+                "is_builtin": False,
+                "is_custom": True,
+                "dsl_config": body.dsl_config,
+                "qs_model_config": body.qs_model_config,
+                "logic_hash": logic_hash,
+                "duplicate_hint": hint,
+            }
+
     template = StrategyTemplate(
         name=body.name,
         strategy_type=body.strategy_type,
@@ -53,6 +118,8 @@ def create_template(
         is_builtin=False,
         is_custom=True,
         dsl_config=body.dsl_config,
+        qs_model_config=body.qs_model_config,
+        logic_hash=logic_hash,
     )
     db.add(template)
     db.commit()
@@ -69,17 +136,7 @@ def create_template(
     db.add(log)
     db.commit()
 
-    return {
-        "id": template.id,
-        "name": template.name,
-        "strategy_type": template.strategy_type,
-        "description": template.description,
-        "default_params": template.default_params,
-        "param_schema": template.param_schema,
-        "is_builtin": False,
-        "is_custom": True,
-        "dsl_config": template.dsl_config,
-    }
+    return _serialize_template(template)
 
 
 @router.delete("/templates/{template_id}")
@@ -129,6 +186,7 @@ def list_instances(db: Session = Depends(get_db), user: User = Depends(get_curre
             "market_type": inst.market_type,
             "params": inst.params,
             "status": inst.status,
+            "logic_hash": inst.logic_hash,
             "started_at": inst.started_at.isoformat() if inst.started_at else None,
             "stopped_at": inst.stopped_at.isoformat() if inst.stopped_at else None,
             "created_at": inst.created_at.isoformat() if inst.created_at else None,
@@ -149,6 +207,10 @@ def create_instance(
         raise HTTPException(status_code=404, detail="策略模板不存在")
 
     merged_params = {**template.default_params, **body.params, "symbol": body.symbol}
+    # 若模板含 qs_model_config，合并到 params（类似 dsl_config 的合并逻辑）
+    if getattr(template, "qs_model_config", None) is not None:
+        merged_params["qs_model_config"] = template.qs_model_config
+
     instance = StrategyInstance(
         template_id=body.template_id,
         account_id=body.account_id,
@@ -157,6 +219,7 @@ def create_instance(
         market_type=body.market_type,
         params=merged_params,
         status="stopped",
+        logic_hash=template.logic_hash,  # 创建时的逻辑版本快照
     )
     db.add(instance)
     db.commit()

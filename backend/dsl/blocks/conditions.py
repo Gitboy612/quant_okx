@@ -63,6 +63,8 @@ class GreaterThan:
     """指标值大于阈值。"""
 
     category = "比较"
+    label = "大于"
+    display_template = "{indicator} 大于 {threshold}"
     description = "指标值大于阈值"
     input_type = "number"
     priority = "P0"
@@ -85,6 +87,8 @@ class LessThan:
     """指标值小于阈值。"""
 
     category = "比较"
+    label = "小于"
+    display_template = "{indicator} 小于 {threshold}"
     description = "指标值小于阈值"
     input_type = "number"
     priority = "P0"
@@ -107,6 +111,8 @@ class AbsGreaterThan:
     """指标值的绝对值大于阈值。"""
 
     category = "比较"
+    label = "绝对值大于"
+    display_template = "{indicator} 绝对值 大于 {threshold}"
     description = "指标值的绝对值大于阈值"
     input_type = "number"
     priority = "P0"
@@ -129,6 +135,8 @@ class AbsLessThan:
     """指标值的绝对值小于阈值。"""
 
     category = "比较"
+    label = "绝对值小于"
+    display_template = "{indicator} 绝对值 小于 {threshold}"
     description = "指标值的绝对值小于阈值"
     input_type = "number"
     priority = "P0"
@@ -154,6 +162,8 @@ class AndCondition:
     """所有子条件均为真。"""
 
     category = "逻辑"
+    label = "同时满足"
+    display_template = "同时满足：{conditions}"
     description = "所有子条件均为真"
     input_type = "bool"
     priority = "P0"
@@ -176,6 +186,8 @@ class OrCondition:
     """任一子条件为真。"""
 
     category = "逻辑"
+    label = "任一满足"
+    display_template = "任一满足：{conditions}"
     description = "任一子条件为真"
     input_type = "bool"
     priority = "P0"
@@ -198,6 +210,8 @@ class NotCondition:
     """子条件取反。"""
 
     category = "逻辑"
+    label = "取反"
+    display_template = "不满足：{condition}"
     description = "子条件取反"
     input_type = "bool"
     priority = "P0"

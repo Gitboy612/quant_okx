@@ -21,5 +21,23 @@ class StrategyTemplateCreate(BaseModel):
     description: str | None = None
     default_params: dict
     param_schema: dict | None = None
-    dsl_config: dict | None = None  # 可拼接策略配置，可选
+    dsl_config: dict | None = None  # 可拼接策略配置，可选（向后兼容）
+    qs_model_config: dict | None = None  # QS-Model v2.0 完整配置（四段式复合结构）
+    force: bool = False  # 检测到重复 logic_hash 时是否强制创建
+
+
+class StrategyTemplateResponse(BaseModel):
+    """模板响应（含 QS-Model 字段与去重提示）。"""
+    id: int
+    name: str
+    strategy_type: str
+    description: str | None = None
+    default_params: dict
+    param_schema: dict | None = None
+    is_builtin: bool
+    is_custom: bool
+    dsl_config: dict | None = None
+    qs_model_config: dict | None = None
+    logic_hash: str | None = None
+    duplicate_hint: str | None = None
 

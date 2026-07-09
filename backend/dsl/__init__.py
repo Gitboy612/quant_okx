@@ -6,6 +6,8 @@
 from dsl.schema import (
     StrategyDSL, Rule, Trigger, BaseStrategyRef,
     BlockRef, IndicatorRef, ConditionRef, ActionRef, EventRef,
+    QSModelConfig, StrategyMeta, ParamDefinition, RiskFilter,
+    resolve_variables,
 )
 from dsl.registry import (
     Registry, indicator_registry, condition_registry, action_registry,
@@ -16,6 +18,8 @@ from dsl.registry import (
 __all__ = [
     "StrategyDSL", "Rule", "Trigger", "BaseStrategyRef",
     "BlockRef", "IndicatorRef", "ConditionRef", "ActionRef", "EventRef",
+    "QSModelConfig", "StrategyMeta", "ParamDefinition", "RiskFilter",
+    "resolve_variables",
     "Registry", "indicator_registry", "condition_registry", "action_registry",
     "event_registry", "base_strategy_registry",
     "indicator", "condition", "action", "event", "base_strategy",

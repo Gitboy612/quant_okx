@@ -22,17 +22,20 @@ class Registry:
 
     def list(self) -> list[dict[str, Any]]:
         """返回所有已注册积木的元数据，供前端展示与校验器使用。
-        每项形如：{kind, category, description, param_schema, output_type, priority}
+        每项形如：{kind, category, label, description, param_schema, output_type, priority, display_template}
+        其中 label 与 display_template 为可选元数据（积木类未定义时为 None）。
         """
         result = []
         for kind, cls in self._registry.items():
             result.append({
                 "kind": kind,
                 "category": getattr(cls, "category", "未分类"),
+                "label": getattr(cls, "label", None),
                 "description": getattr(cls, "description", ""),
                 "param_schema": getattr(cls, "param_schema", {}),
                 "output_type": getattr(cls, "output_type", None),
                 "priority": getattr(cls, "priority", "P1"),
+                "display_template": getattr(cls, "display_template", None),
             })
         return result
 
