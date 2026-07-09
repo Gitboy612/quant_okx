@@ -15,6 +15,7 @@ class StrategyTemplate(Base):
     is_builtin = Column(Boolean, default=False)
     is_custom = Column(Boolean, default=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    dsl_config = Column(JSON, nullable=True)  # 可拼接策略的 DSL 配置；NULL 表示传统硬编码策略
 
 
 class StrategyInstance(Base):

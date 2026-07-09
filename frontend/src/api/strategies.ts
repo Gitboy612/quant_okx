@@ -23,6 +23,7 @@ export function createTemplate(data: {
   description?: string
   default_params: Record<string, unknown>
   param_schema: Record<string, unknown> | null
+  dsl_config?: Record<string, unknown> | null
 }) {
   return client.post<StrategyTemplate>('/strategies/templates', data)
 }

@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import { AuthProvider, useAuth } from './hooks/useAuth'
+import { usePerformanceMode } from './hooks/usePerformanceMode'
 import Layout from './components/Layout'
 import LoginPage from './pages/LoginPage'
 import DashboardPage from './pages/DashboardPage'
@@ -31,29 +32,11 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
-/* Card stack transition: outgoing card shrinks back, incoming card slides forward */
+/* Card stack transition */
 const cardVariants = {
-  initial: {
-    opacity: 0,
-    y: 30,
-    scale: 0.92,
-    rotateX: -2,
-    filter: 'blur(2px)',
-  },
-  animate: {
-    opacity: 1,
-    y: 0,
-    scale: 1,
-    rotateX: 0,
-    filter: 'blur(0px)',
-  },
-  exit: {
-    opacity: 0,
-    y: -20,
-    scale: 0.94,
-    rotateX: 2,
-    filter: 'blur(2px)',
-  },
+  initial: { opacity: 0, y: 20, scale: 0.96 },
+  animate: { opacity: 1, y: 0, scale: 1 },
+  exit: { opacity: 0, y: -15, scale: 0.97 },
 }
 
 const cardTransition = {
@@ -64,14 +47,17 @@ const cardTransition = {
 }
 
 function PageCard({ children }: { children: React.ReactNode }) {
+  const { performanceMode } = usePerformanceMode()
+
+  if (performanceMode) {
+    return <>{children}</>
+  }
+
   return (
     <motion.div
       variants={cardVariants}
       transition={cardTransition}
-      style={{
-        transformOrigin: 'center top',
-        willChange: 'opacity, transform, filter',
-      }}
+      style={{ transformOrigin: 'center top', willChange: 'opacity, transform' }}
     >
       {children}
     </motion.div>

@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker, declarative_base
 from config import DATABASE_URL
 
@@ -10,6 +10,21 @@ engine = create_engine(
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
+
+
+def _migrate_strategy_templates_dsl_config():
+    """确保 strategy_templates 表包含 dsl_config 列（向后兼容迁移）。
+
+    SQLAlchemy ``create_all`` 只建新表不加列。已有库需要手动 ALTER TABLE。
+    通过 inspector 检查列是否存在，缺失则添加，避免重复执行报错。
+    """
+    insp = inspect(engine)
+    if "strategy_templates" not in insp.get_table_names():
+        return
+    existing_columns = {c["name"] for c in insp.get_columns("strategy_templates")}
+    if "dsl_config" not in existing_columns:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE strategy_templates ADD COLUMN dsl_config JSON"))
 
 
 def init_db():
@@ -25,6 +40,7 @@ def init_db():
     from models.strategy_event import StrategyEvent
 
     Base.metadata.create_all(bind=engine)
+    _migrate_strategy_templates_dsl_config()
 
 
 def get_db():

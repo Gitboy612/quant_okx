@@ -24,6 +24,7 @@ def list_templates(db: Session = Depends(get_db), user: User = Depends(get_curre
             "param_schema": t.param_schema,
             "is_builtin": t.is_builtin,
             "is_custom": t.is_custom,
+            "dsl_config": t.dsl_config,
         }
         for t in templates
     ]
@@ -51,6 +52,7 @@ def create_template(
         param_schema=body.param_schema,
         is_builtin=False,
         is_custom=True,
+        dsl_config=body.dsl_config,
     )
     db.add(template)
     db.commit()
@@ -76,6 +78,7 @@ def create_template(
         "param_schema": template.param_schema,
         "is_builtin": False,
         "is_custom": True,
+        "dsl_config": template.dsl_config,
     }
 
 

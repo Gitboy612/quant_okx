@@ -77,6 +77,7 @@ export interface StrategyTemplate {
   param_schema: Record<string, ParamSchemaField> | null
   is_builtin: boolean
   is_custom: boolean
+  dsl_config: Record<string, unknown> | null
 }
 
 export interface StrategyInstance {

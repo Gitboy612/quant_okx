@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Plus, Play, Pause, Square, ChevronDown, Trash2, RefreshCw, FileText, X, CheckCircle, XCircle, Loader2, AlertTriangle, Search } from 'lucide-react'
+import { Plus, Play, Pause, Square, ChevronDown, Trash2, RefreshCw, FileText, X, CheckCircle, XCircle, Loader2, AlertTriangle, Search, Blocks } from 'lucide-react'
 import Dropdown from '../components/Dropdown'
 import {
   listInstances,
@@ -21,6 +21,7 @@ import { getStrategyEvents } from '../api/monitoring'
 import { formatInstId, isContractPair, INST_ID_LABEL } from '../utils/instId'
 import StatusBadge from '../components/StatusBadge'
 import Modal from '../components/Modal'
+import DslEditor from '../components/DslEditor'
 import type { StrategyInstance, StrategyTemplate, Account, ParamSchemaField, StrategyEvent } from '../types'
 
 export default function StrategiesPage() {
@@ -29,6 +30,7 @@ export default function StrategiesPage() {
   const [accounts, setAccounts] = useState<Account[]>([])
   const [showCreate, setShowCreate] = useState(false)
   const [showNewTemplate, setShowNewTemplate] = useState(false)
+  const [showDslEditor, setShowDslEditor] = useState(false)
   const [expandedId, setExpandedId] = useState<number | null>(null)
   const [creating, setCreating] = useState(false)
   const [selectedTemplateId, setSelectedTemplateId] = useState<number | null>(null)
@@ -258,6 +260,12 @@ export default function StrategiesPage() {
             <FileText className="w-4 h-4" /> 自定义模板
           </button>
           <button
+            onClick={() => setShowDslEditor(true)}
+            className="flex items-center gap-2 border border-[#1E1E28] text-[#E8E8ED] rounded-lg px-4 py-2 text-sm font-medium hover:bg-[#1A1A24] transition-colors"
+          >
+            <Blocks className="w-4 h-4" /> DSL 拼接模板
+          </button>
+          <button
             onClick={openCreateModal}
             className="flex items-center gap-2 bg-[#00D4AA] text-[#0A0A0F] rounded-lg px-4 py-2 text-sm font-semibold hover:bg-[#00D4AA]/90 transition-colors"
           >
@@ -476,52 +484,54 @@ export default function StrategiesPage() {
         )}
       </motion.div>
 
-      <Modal open={showCreate} onClose={() => { setShowCreate(false); resetCreateForm() }} title="新建策略">
+      <Modal open={showCreate} onClose={() => { setShowCreate(false); resetCreateForm() }} title="新建策略" wide>
         {activeAccounts.length === 0 ? (
           <div className="text-sm text-[#6B6B7B] text-center py-4">请先在「账户管理」中添加 OKX 账户</div>
         ) : (
-          <div className="space-y-4">
-            <div>
-              <label className="text-xs text-[#6B6B7B]">策略模板</label>
-              <Dropdown
-                options={templates.map((t) => ({ value: t.id, label: `${t.name} ${t.is_custom ? '(自定义)' : ''}` }))}
-                value={selectedTemplateId ?? ''}
-                onChange={(v) => setSelectedTemplateId(Number(v))}
-                className="mt-1 w-full"
-              />
-              {selectedTemplate?.description && (
-                <p className="text-xs text-[#6B6B7B] mt-1 leading-relaxed">{selectedTemplate.description}</p>
-              )}
+          <div className="space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs text-[#6B6B7B]">策略模板</label>
+                <Dropdown
+                  options={templates.map((t) => ({ value: t.id, label: `${t.name} ${t.is_custom ? '(自定义)' : ''}` }))}
+                  value={selectedTemplateId ?? ''}
+                  onChange={(v) => setSelectedTemplateId(Number(v))}
+                  className="mt-1 w-full"
+                />
+                {selectedTemplate?.description && (
+                  <p className="text-xs text-[#6B6B7B] mt-1 leading-relaxed">{selectedTemplate.description}</p>
+                )}
+              </div>
+              <div>
+                <label className="text-xs text-[#6B6B7B]">绑定账户</label>
+                <Dropdown
+                  options={activeAccounts.map((a) => ({ value: a.id, label: `${a.name} (${a.trade_mode === 'live' ? '真实' : '模拟'})` }))}
+                  value={selectedAccountForCreate ?? ''}
+                  onChange={(v) => setSelectedAccountForCreate(Number(v))}
+                  className="mt-1 w-full"
+                />
+              </div>
             </div>
 
-            <div>
-              <label className="text-xs text-[#6B6B7B]">绑定账户</label>
-              <Dropdown
-                options={activeAccounts.map((a) => ({ value: a.id, label: `${a.name} (${a.trade_mode === 'live' ? '真实' : '模拟'})` }))}
-                value={selectedAccountForCreate ?? ''}
-                onChange={(v) => setSelectedAccountForCreate(Number(v))}
-                className="mt-1 w-full"
-              />
-            </div>
-
-            <div>
-              <label className="text-xs text-[#6B6B7B]">策略名称</label>
-              <input
-                value={instanceName}
-                onChange={(e) => setInstanceName(e.target.value)}
-                placeholder={selectedTemplate?.name ?? '自定义名称'}
-                className="w-full bg-[#0C0C14] border border-[#1E1E28] rounded-md px-3 py-2 text-sm text-[#E8E8ED] mt-1 focus:outline-none focus:border-[#00D4AA]"
-              />
-            </div>
-
-            <div>
-              <label className="text-xs text-[#6B6B7B]">市场类型</label>
-              <Dropdown
-                options={[{ value: 'spot', label: '现货' }, { value: 'swap', label: '永续合约' }]}
-                value={selectedMarketType}
-                onChange={(v) => setSelectedMarketType(String(v))}
-                className="mt-1 w-full"
-              />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs text-[#6B6B7B]">策略名称</label>
+                <input
+                  value={instanceName}
+                  onChange={(e) => setInstanceName(e.target.value)}
+                  placeholder={selectedTemplate?.name ?? '自定义名称'}
+                  className="w-full bg-[#0C0C14] border border-[#1E1E28] rounded-md px-3 py-2 text-sm text-[#E8E8ED] mt-1 focus:outline-none focus:border-[#00D4AA]"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-[#6B6B7B]">市场类型</label>
+                <Dropdown
+                  options={[{ value: 'spot', label: '现货' }, { value: 'swap', label: '永续合约' }]}
+                  value={selectedMarketType}
+                  onChange={(v) => setSelectedMarketType(String(v))}
+                  className="mt-1 w-full"
+                />
+              </div>
             </div>
 
             <div>
@@ -593,7 +603,7 @@ export default function StrategiesPage() {
 
             <div className="border-t border-[#1E1E28] pt-3">
               <div className="text-xs text-[#6B6B7B] mb-3 uppercase tracking-wide">参数配置</div>
-              <div className="space-y-3 max-h-60 overflow-y-auto pr-1">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {Object.entries(paramSchema).map(([key, field]) => (
                   <div key={key}>
                     <label className="text-xs text-[#6B6B7B]" title={field.hint}>
@@ -648,6 +658,11 @@ export default function StrategiesPage() {
         open={showNewTemplate}
         onClose={() => setShowNewTemplate(false)}
         onCreated={loadData}
+      />
+      <DslEditor
+        open={showDslEditor}
+        onClose={() => setShowDslEditor(false)}
+        onSaved={loadData}
       />
     </div>
   )
@@ -717,8 +732,8 @@ function NewTemplateModal({
   }
 
   return (
-    <Modal open={open} onClose={onClose} title="创建自定义策略模板">
-      <div className="space-y-3 max-h-[70vh] overflow-y-auto pr-1">
+    <Modal open={open} onClose={onClose} title="创建自定义策略模板" wide scrollable={false}>
+      <div className="space-y-3">
         <div>
           <label className="text-xs text-[#6B6B7B]">模板名称</label>
           <input
@@ -755,8 +770,8 @@ function NewTemplateModal({
                 <button onClick={() => removeField(idx)} className="absolute top-2 right-2 text-[#6B6B7B] hover:text-[#FF4757]">
                   <X className="w-3.5 h-3.5" />
                 </button>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div className="min-w-0">
                     <label className="text-[10px] text-[#6B6B7B]">参数名</label>
                     <input
                       value={f.key}
@@ -765,7 +780,7 @@ function NewTemplateModal({
                       className="w-full bg-[#14141A] border border-[#1E1E28] rounded-md px-2 py-1 text-xs text-[#E8E8ED] mt-0.5 focus:outline-none focus:border-[#00D4AA] font-mono"
                     />
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <label className="text-[10px] text-[#6B6B7B]">显示名</label>
                     <input
                       value={f.label}
@@ -774,7 +789,7 @@ function NewTemplateModal({
                       className="w-full bg-[#14141A] border border-[#1E1E28] rounded-md px-2 py-1 text-xs text-[#E8E8ED] mt-0.5 focus:outline-none focus:border-[#00D4AA]"
                     />
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <label className="text-[10px] text-[#6B6B7B]">类型</label>
                     <Dropdown
                       options={[{ value: 'number', label: '数字' }, { value: 'string', label: '文本' }, { value: 'select', label: '下拉' }]}
@@ -783,7 +798,7 @@ function NewTemplateModal({
                       className="mt-0.5 w-full"
                     />
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <label className="text-[10px] text-[#6B6B7B]">默认值</label>
                     <input
                       value={f.default}
@@ -793,7 +808,7 @@ function NewTemplateModal({
                   </div>
                   {f.type === 'number' && (
                     <>
-                      <div>
+                      <div className="min-w-0">
                         <label className="text-[10px] text-[#6B6B7B]">最小值</label>
                         <input
                           value={f.min}
@@ -801,7 +816,7 @@ function NewTemplateModal({
                           className="w-full bg-[#14141A] border border-[#1E1E28] rounded-md px-2 py-1 text-xs text-[#E8E8ED] mt-0.5 focus:outline-none focus:border-[#00D4AA] font-mono"
                         />
                       </div>
-                      <div>
+                      <div className="min-w-0">
                         <label className="text-[10px] text-[#6B6B7B]">最大值</label>
                         <input
                           value={f.max}
@@ -809,7 +824,7 @@ function NewTemplateModal({
                           className="w-full bg-[#14141A] border border-[#1E1E28] rounded-md px-2 py-1 text-xs text-[#E8E8ED] mt-0.5 focus:outline-none focus:border-[#00D4AA] font-mono"
                         />
                       </div>
-                      <div>
+                      <div className="min-w-0">
                         <label className="text-[10px] text-[#6B6B7B]">步长</label>
                         <input
                           value={f.step}
@@ -819,7 +834,7 @@ function NewTemplateModal({
                       </div>
                     </>
                   )}
-                  <div>
+                  <div className="min-w-0">
                     <label className="text-[10px] text-[#6B6B7B]">提示说明</label>
                     <input
                       value={f.hint}

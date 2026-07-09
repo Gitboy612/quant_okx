@@ -6,7 +6,7 @@ interface PnlRecord {
   total_pnl: number
 }
 
-export type TimeRange = '5m' | '30m' | '1d' | '1w' | 'all'
+export type TimeRange = '1h' | '1d' | '1w' | '1mo' | 'all'
 
 interface PnLChartProps {
   data: PnlRecord[]
@@ -14,14 +14,20 @@ interface PnLChartProps {
 }
 
 const TIME_RANGE_DURATIONS: Record<TimeRange, number | null> = {
-  '5m': 5 * 60 * 1000,
-  '30m': 30 * 60 * 1000,
+  '1h': 60 * 60 * 1000,
   '1d': 24 * 60 * 60 * 1000,
   '1w': 7 * 24 * 60 * 60 * 1000,
+  '1mo': 30 * 24 * 60 * 60 * 1000,
   'all': null,
 }
 
-function PnLChart({ data, timeRange = '1d' }: PnLChartProps) {
+function formatPnl(value: number): string {
+  const absVal = Math.abs(value).toFixed(2)
+  if (value >= 0) return `盈利 $${absVal}`
+  return `亏损 $${absVal}`
+}
+
+function PnLChart({ data, timeRange = 'all' }: PnLChartProps) {
   const duration = TIME_RANGE_DURATIONS[timeRange]
   const cutoff = duration != null ? Date.now() - duration : 0
 
@@ -76,6 +82,7 @@ function PnLChart({ data, timeRange = '1d' }: PnLChartProps) {
             boxShadow: '0 0 20px rgba(0, 212, 170, 0.1), 0 8px 24px rgba(0, 0, 0, 0.4)',
           }}
           labelStyle={{ color: '#7B86A2', fontWeight: 500 }}
+          formatter={(value: number) => [formatPnl(value), '']}
           itemStyle={{ color: accentColor, fontWeight: 600 }}
         />
         <Area

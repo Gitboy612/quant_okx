@@ -3,6 +3,7 @@ import { motion } from 'framer-motion'
 import { Save, Upload, Wifi, CheckCircle, XCircle, Loader2, Lock, Play, Square, Server, Database, Trash2, RefreshCw, AlertTriangle } from 'lucide-react'
 import { getSettings, saveSettings, getProxySettings, saveProxySettings, testProxy, importProxyConfig, getProxyStatus, startProxy, stopProxy, getSampleConfigs, importSampleConfig, getMmdbStatus } from '../api/settings'
 import { changePassword } from '../api/auth'
+import { usePerformanceMode } from '../hooks/usePerformanceMode'
 import { resetPnl, cleanupPnlRecords, cleanupOrderRecords, cleanupStrategyEvents, correctEquity, correctUnrealizedPnl, correctRealizedPnl } from '../api/maintenance'
 import { listInstances } from '../api/strategies'
 import { listAccounts } from '../api/accounts'
@@ -64,6 +65,7 @@ export default function SettingsPage() {
   const [maintenanceResult, setMaintenanceResult] = useState<{ op: string; ok: boolean; message: string } | null>(null)
   const [confirmOp, setConfirmOp] = useState<string | null>(null)
   const [strategyInstances, setStrategyInstances] = useState<Array<{ id: number; name: string; status: string }>>([])
+  const { performanceMode, togglePerformanceMode } = usePerformanceMode()
   const [accounts, setAccounts] = useState<Array<{ id: number; name: string }>>([])
   const [selectedStrategyId, setSelectedStrategyId] = useState<number | null>(null)
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null)
@@ -255,6 +257,25 @@ export default function SettingsPage() {
       >
         <h3 className="text-xs text-[#7B86A2] mb-4 uppercase tracking-wide">常规设置</h3>
         <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <label className="text-sm text-[#EDF0F7]">性能模式</label>
+              <p className="text-xs text-[#7B86A2] mt-0.5">开启后降低动画和背景效果，提升操作流畅度</p>
+            </div>
+            <button
+              onClick={togglePerformanceMode}
+              className={`relative w-10 h-5 rounded-full transition-colors ${
+                performanceMode ? 'bg-[#00D4AA]' : 'bg-[rgba(0,212,170,0.08)]'
+              }`}
+            >
+              <span
+                className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                  performanceMode ? 'translate-x-5' : ''
+                }`}
+              />
+            </button>
+          </div>
+
           <div>
             <label className="block text-sm text-[#EDF0F7] mb-2">资产自动刷新间隔（秒）</label>
             <p className="text-xs text-[#7B86A2] mb-3">仪表盘资产余额自动拉取的间隔时间，设为 0 则关闭自动刷新</p>

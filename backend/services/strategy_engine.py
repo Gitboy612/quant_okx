@@ -8,6 +8,7 @@ from strategies.grid_strategy import GridStrategy
 from strategies.trend_strategy import TrendStrategy
 from strategies.arbitrage_strategy import ArbitrageStrategy
 from strategies.advanced_grid_hedge_strategy import AdvancedGridHedgeStrategy
+from dsl.executor import ComposableStrategy
 
 
 class StrategyEngine:
@@ -18,6 +19,7 @@ class StrategyEngine:
         "trend": TrendStrategy,
         "arbitrage": ArbitrageStrategy,
         "advanced_grid_hedge": AdvancedGridHedgeStrategy,
+        "composable": ComposableStrategy,
     }
 
     def __new__(cls):
@@ -150,9 +152,15 @@ class StrategyEngine:
                 trade_mode=account.trade_mode,
             )
 
+            # 构建 params：若实例 params 未携带 dsl_config 但模板有，则合并进来，
+            # 供 ComposableStrategy 从 self.params["dsl_config"] 读取。
+            params = dict(instance.params)
+            if "dsl_config" not in params and getattr(template, "dsl_config", None) is not None:
+                params["dsl_config"] = template.dsl_config
+
             strategy = strategy_cls(
                 instance_id=instance.id,
-                params=instance.params,
+                params=params,
                 client=client,
                 db_session_factory=SessionLocal,
                 account_id=account.id,

@@ -1,0 +1,3 @@
+# QuantOKX 桌面客户端依赖
+# PySide6 已包含 QtQuick3D / QtCharts 等模块，无需单独安装 PySide3D
+PySide6>=6.6.0

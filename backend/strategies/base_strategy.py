@@ -283,6 +283,35 @@ class BaseStrategy(ABC):
         except Exception as e:
             print(f"[BaseStrategy] record_final_pnl error: {e}")
 
+    # —— 可拼接 DSL 钩子（默认空实现，供 ComposableStrategy 编排调用）——
+    async def on_start(self, ctx=None) -> None:
+        """策略启动时调用（放置初始网格等）。默认空。"""
+        pass
+
+    async def on_tick(self, ctx=None) -> None:
+        """每个 tick 调用（监控 + 记录 PnL）。默认空。"""
+        pass
+
+    async def on_order_filled(self, order_info, ctx=None) -> None:
+        """订单成交时调用。默认空。"""
+        pass
+
+    async def on_pause(self, ctx=None) -> None:
+        """暂停时调用（撤挂单但保留持仓）。默认空。"""
+        pass
+
+    async def on_resume(self, ctx=None) -> None:
+        """恢复时调用（重新挂网格）。默认空。"""
+        pass
+
+    async def on_stop(self, ctx=None) -> None:
+        """停止时调用。默认空。"""
+        pass
+
+    def get_theoretical_position(self, ctx=None) -> float:
+        """返回当前价位下的理论持仓量。供 rebalance_position 动作使用。默认 0。"""
+        return 0.0
+
     def update_status(self, status: str):
         from models.strategy import StrategyInstance
         db = self.db_session_factory()

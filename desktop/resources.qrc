@@ -1,0 +1,43 @@
+<RCC>
+    <!-- QuantOKX 桌面客户端 QML 资源注册表 -->
+    <!--
+        说明：
+        - 当前 main.py 通过本地文件路径直接加载 qml/main.qml，故 resources.qrc 暂非必需。
+        - 此 qrc 为后续 PyInstaller 打包（Task 6）与正式资源注册预留：
+          打包时可用 `pyside6-rcc resources.qrc -o resources_rc.py` 编译并在 main.py import。
+        - components/ 下的组件文件由 Task 4 添加（IconRail/TopBar/WorkspaceCard 等）。
+        - theme/ 下的主题 QML 样式为 Task 4 预留（当前主题颜色在 main.qml 的 colors 内联管理）。
+    -->
+    <qresource prefix="/">
+        <file>qml/main.qml</file>
+
+        <!-- components 目录（Task 4 工作台 UI 框架组件） -->
+        <file>qml/components/IconRail.qml</file>
+        <file>qml/components/TopBar.qml</file>
+        <file>qml/components/WorkspaceCard.qml</file>
+        <file>qml/components/ThemeToggle.qml</file>
+        <file>qml/components/KpiCard.qml</file>
+        <file>qml/components/StatusBadge.qml</file>
+        <file>qml/components/DataTable.qml</file>
+
+        <!-- pages 目录（Task 5 业务页面） -->
+        <file>qml/pages/LoginPage.qml</file>
+        <file>qml/pages/DashboardPage.qml</file>
+        <file>qml/pages/StrategiesPage.qml</file>
+        <file>qml/pages/AccountsPage.qml</file>
+        <file>qml/pages/MonitoringPage.qml</file>
+        <file>qml/pages/OrdersPage.qml</file>
+        <file>qml/pages/PnlPage.qml</file>
+        <file>qml/pages/LogsPage.qml</file>
+        <file>qml/pages/SettingsPage.qml</file>
+
+        <!-- 主题样式目录（Task 4 当前在 main.qml 内联管理，暂无需独立文件）
+        <file>qml/theme/dark.qml</file>
+        <file>qml/theme/light.qml</file>
+        -->
+
+        <!-- 应用图标（Task 6 打包时添加）
+        <file>resources/icons/app.ico</file>
+        -->
+    </qresource>
+</RCC>

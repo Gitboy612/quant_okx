@@ -1,5 +1,6 @@
 """Embedded proxy core management - manages a local Clash proxy process."""
 import os
+import sys
 import socket
 import subprocess
 import time
@@ -80,6 +81,11 @@ def _wrap_with_mirrors(github_url: str) -> list[str]:
 
 def _get_bin_dir() -> str:
     """Get the bin directory for storing binaries."""
+    if getattr(sys, "frozen", False):
+        # PyInstaller 打包后：mihomo.exe 携带在 _MEIPASS/bin
+        bin_dir = os.path.join(sys._MEIPASS, "bin")
+        os.makedirs(bin_dir, exist_ok=True)
+        return bin_dir
     current_dir = os.path.dirname(os.path.abspath(__file__))
     bin_dir = os.path.join(os.path.dirname(current_dir), "bin")
     os.makedirs(bin_dir, exist_ok=True)
@@ -255,7 +261,11 @@ def _find_clash_binary() -> str | None:
     for p in common_paths:
         if os.path.exists(p):
             return p
-    
+
+    # frozen 运行时 _MEIPASS 只读，不自动下载
+    if getattr(sys, "frozen", False):
+        return None
+
     # Try to download mihomo
     downloaded = _download_mihomo()
     if downloaded:

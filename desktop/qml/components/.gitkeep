@@ -1,0 +1,3 @@
+# 占位文件：保持 components 目录存在于版本控制中。
+# Task 4 将在此目录下添加 IconRail.qml / TopBar.qml / WorkspaceCard.qml /
+# ThemeToggle.qml / KpiCard.qml / StatusBadge.qml / DataTable.qml 等组件。

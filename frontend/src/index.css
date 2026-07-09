@@ -42,6 +42,12 @@ body {
   letter-spacing: 0.01em;
 }
 
+/* Prevent flex/grid children from overflowing their container */
+*:where(div) > * {
+  min-width: 0;
+  min-height: 0;
+}
+
 /* ===== Font Scale (crisp at every size) ===== */
 .text-xs { font-size: 12px; line-height: 1.5; letter-spacing: 0.02em; }
 .text-[11px] { font-size: 11px; line-height: 1.5; letter-spacing: 0.03em; }
@@ -362,3 +368,11 @@ input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; marg
   0%, 100% { opacity: 0.3; transform: scale(1); }
   50% { opacity: 0.7; transform: scale(1.1); }
 }
+
+/* ===== Performance Mode ===== */
+.performance-mode .scan-line::before { display: none; }
+.performance-mode .cinema-beams { display: none; }
+.performance-mode .cinema-particles { display: none; }
+.performance-mode .animate-float { animation: none; }
+.performance-mode .animate-shimmer { animation: none; }
+.performance-mode .animate-pulse-glow { animation: none; }

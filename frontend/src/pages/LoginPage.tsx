@@ -273,7 +273,7 @@ export default function LoginPage() {
         )}
       </AnimatePresence>
 
-      <div className="min-h-screen flex items-center justify-center relative scan-line">
+      <div className="h-screen flex flex-col justify-center relative scan-line overflow-hidden">
         {/* Ambient glow */}
         <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] rounded-full bg-[#00D4AA]/[0.03] blur-[100px] pointer-events-none" />
         <div className="absolute bottom-0 left-1/3 w-[400px] h-[400px] rounded-full bg-[#3A8BFF]/[0.02] blur-[80px] pointer-events-none" />
@@ -282,7 +282,7 @@ export default function LoginPage() {
           initial={{ opacity: 0 }}
           animate={{ opacity: showOpening ? 0 : 1 }}
           transition={{ duration: 0.8, delay: 0.1 }}
-          className="w-full max-w-sm relative z-10"
+          className="w-full max-w-sm relative z-10 mx-auto my-auto"
         >
           {/* Logo area — 3D 鼠标跟踪旋转 */}
           <div className="text-center mb-10">

@@ -30,7 +30,7 @@ export default function DashboardPage() {
   const [positionsLoading, setPositionsLoading] = useState(false)
   const [lastRefresh, setLastRefresh] = useState<string | null>(null)
   const [refreshInterval, setRefreshInterval] = useState<number>(0)
-  const [timeRange, setTimeRange] = useState<TimeRange>('1d')
+  const [timeRange, setTimeRange] = useState<TimeRange>('all')
   const [summaryLoading, setSummaryLoading] = useState(true)
   const [ordersLoading, setOrdersLoading] = useState(true)
   const [logsLoading, setLogsLoading] = useState(true)
@@ -282,7 +282,7 @@ export default function DashboardPage() {
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-[11px] text-[#7B86A2] uppercase tracking-[0.12em] font-semibold">盈亏曲线</h3>
             <div className="flex gap-1">
-              {(['5m', '30m', '1d', '1w', 'all'] as TimeRange[]).map((r) => (
+              {(['1h', '1d', '1w', '1mo', 'all'] as TimeRange[]).map((r) => (
                 <button
                   key={r}
                   onClick={() => setTimeRange(r)}
@@ -292,7 +292,7 @@ export default function DashboardPage() {
                       : 'text-[#7B86A2] border-[#2A3350] hover:text-[#EDF0F7] hover:border-[#505C78]'
                   }`}
                 >
-                  {r === '5m' ? '5分' : r === '30m' ? '30分' : r === '1d' ? '1天' : r === '1w' ? '1周' : '全部'}
+                  {r === '1h' ? '1小时' : r === '1d' ? '1天' : r === '1w' ? '1周' : r === '1mo' ? '1月' : '全部'}
                 </button>
               ))}
             </div>

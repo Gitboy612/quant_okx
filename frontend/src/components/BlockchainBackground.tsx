@@ -1,4 +1,5 @@
 import { useEffect, useRef, useCallback } from 'react'
+import { usePerformanceMode } from '../hooks/usePerformanceMode'
 
 /* ---------- Types ---------- */
 interface TokenNode {
@@ -153,6 +154,10 @@ export default function BlockchainBackground() {
   const hoveredTokenRef = useRef<TokenNode | null>(null)
   const tooltipRef = useRef<HTMLDivElement | null>(null)
   const initializedRef = useRef(false)
+
+  const { performanceMode } = usePerformanceMode()
+  const perfRef = useRef(performanceMode)
+  useEffect(() => { perfRef.current = performanceMode }, [performanceMode])
   const dragStateRef = useRef<{
     active: boolean
     token: TokenNode | null
@@ -347,6 +352,7 @@ export default function BlockchainBackground() {
     /* ---- Draw loop ---- */
     const draw = () => {
       ctx!.clearRect(0, 0, w, h)
+      const perf = perfRef.current
       const cx = w / 2
       const cy = h / 2
       const time = Date.now() * 0.001
@@ -356,7 +362,9 @@ export default function BlockchainBackground() {
       const stars = starsRef.current
 
       // ====== LAYER 1: Starfield (bottom) ======
-      stars.forEach((star) => {
+      const maxStars = perf ? 100 : stars.length
+      for (let i = 0; i < maxStars; i++) {
+        const star = stars[i]
         const dx = star.x - cx
         const dy = star.y - cy
         const dist = Math.sqrt(dx * dx + dy * dy)
@@ -374,22 +382,23 @@ export default function BlockchainBackground() {
         }
 
         // Twinkle
-        const twinkle = Math.sin(time * 2 + star.x * 0.01 + star.y * 0.01) * 0.15 + 0.85
+        const twinkle = perf ? 1 : (Math.sin(time * 2 + star.x * 0.01 + star.y * 0.01) * 0.15 + 0.85)
 
         ctx!.beginPath()
         ctx!.arc(star.x, star.y, star.size, 0, Math.PI * 2)
         ctx!.fillStyle = `rgba(200, 220, 255, ${star.brightness * twinkle})`
         ctx!.fill()
-      })
+      }
 
       // ====== LAYER 2: Token-to-token connections ======
+      const tokenConnDist = perf ? 150 : 280
       for (let i = 0; i < tokens.length; i++) {
         for (let j = i + 1; j < tokens.length; j++) {
           const dx = tokens[i].x - tokens[j].x
           const dy = tokens[i].y - tokens[j].y
           const dist = Math.sqrt(dx * dx + dy * dy)
-          if (dist < 280) {
-            const baseOpacity = (1 - dist / 280) * 0.04
+          if (dist < tokenConnDist) {
+            const baseOpacity = (1 - dist / tokenConnDist) * 0.04
             const boost = (tokens[i].hovered || tokens[j].hovered) ? 0.05 : 0
             ctx!.beginPath()
             ctx!.strokeStyle = `rgba(0, 212, 170, ${baseOpacity + boost})`
@@ -400,8 +409,8 @@ export default function BlockchainBackground() {
             ctx!.stroke()
             ctx!.setLineDash([])
 
-            // Data packet
-            if (dist < 220) {
+            // Data packet (skip in perf mode)
+            if (!perf && dist < 220) {
               const speed = 0.0003 + i * 0.00008
               const t = ((Date.now() * speed) % 1 + 1) % 1
               const px = tokens[i].x + (tokens[j].x - tokens[i].x) * t
@@ -415,25 +424,29 @@ export default function BlockchainBackground() {
         }
       }
 
-      // ====== LAYER 3: Dot connections ======
-      for (let i = 0; i < dots.length; i++) {
-        for (let j = i + 1; j < dots.length; j++) {
-          const dx = dots[i].x - dots[j].x
-          const dy = dots[i].y - dots[j].y
-          const dist = Math.sqrt(dx * dx + dy * dy)
-          if (dist < CONNECTION_DIST) {
-            ctx!.beginPath()
-            ctx!.strokeStyle = `rgba(0, 212, 170, ${(1 - dist / CONNECTION_DIST) * 0.03})`
-            ctx!.lineWidth = 0.3
-            ctx!.moveTo(dots[i].x, dots[i].y)
-            ctx!.lineTo(dots[j].x, dots[j].y)
-            ctx!.stroke()
+      // ====== LAYER 3: Dot connections (skip in perf mode) ======
+      if (!perf) {
+        for (let i = 0; i < dots.length; i++) {
+          for (let j = i + 1; j < dots.length; j++) {
+            const dx = dots[i].x - dots[j].x
+            const dy = dots[i].y - dots[j].y
+            const dist = Math.sqrt(dx * dx + dy * dy)
+            if (dist < CONNECTION_DIST) {
+              ctx!.beginPath()
+              ctx!.strokeStyle = `rgba(0, 212, 170, ${(1 - dist / CONNECTION_DIST) * 0.03})`
+              ctx!.lineWidth = 0.3
+              ctx!.moveTo(dots[i].x, dots[i].y)
+              ctx!.lineTo(dots[j].x, dots[j].y)
+              ctx!.stroke()
+            }
           }
         }
       }
 
       // ====== LAYER 3b: Draw dots ======
-      dots.forEach((d) => {
+      const maxDots = perf ? 5 : dots.length
+      for (let i = 0; i < maxDots; i++) {
+        const d = dots[i]
         ctx!.beginPath()
         ctx!.arc(d.x, d.y, 1, 0, Math.PI * 2)
         ctx!.fillStyle = `rgba(0, 212, 170, ${d.opacity})`
@@ -442,7 +455,7 @@ export default function BlockchainBackground() {
         d.y += d.vy
         if (d.x < 0 || d.x > w) d.vx *= -1
         if (d.y < 0 || d.y > h) d.vy *= -1
-      })
+      }
 
       // ====== LAYER 4: Token nodes ======
       let hoveredAny = false
@@ -490,8 +503,8 @@ export default function BlockchainBackground() {
         const r = token.radius
         const op = token.opacity
 
-        // 1) Click pulse ring
-        if (token.clickScale > 0.01) {
+        // 1) Click pulse ring (skip in perf mode)
+        if (token.clickScale > 0.01 && !perf) {
           ctx!.beginPath()
           ctx!.arc(token.x, token.y, token.clickPulseRadius, 0, Math.PI * 2)
           const alpha = Math.floor(token.clickScale * 100).toString(16).padStart(2, '0')
@@ -500,15 +513,17 @@ export default function BlockchainBackground() {
           ctx!.stroke()
         }
 
-        // 2) Outer glow
-        const glowR = r * (isHovered ? 3.5 : 2.0)
-        const glow = ctx!.createRadialGradient(token.x, token.y, r * 0.8, token.x, token.y, glowR)
-        glow.addColorStop(0, token.color + (isHovered ? '20' : '08'))
-        glow.addColorStop(1, token.color + '00')
-        ctx!.beginPath()
-        ctx!.arc(token.x, token.y, glowR, 0, Math.PI * 2)
-        ctx!.fillStyle = glow
-        ctx!.fill()
+        // 2) Outer glow (skip in perf mode)
+        if (!perf) {
+          const glowR = r * (isHovered ? 3.5 : 2.0)
+          const glow = ctx!.createRadialGradient(token.x, token.y, r * 0.8, token.x, token.y, glowR)
+          glow.addColorStop(0, token.color + (isHovered ? '20' : '08'))
+          glow.addColorStop(1, token.color + '00')
+          ctx!.beginPath()
+          ctx!.arc(token.x, token.y, glowR, 0, Math.PI * 2)
+          ctx!.fillStyle = glow
+          ctx!.fill()
+        }
 
         // 3) Circle border + bg
         ctx!.beginPath()
@@ -529,8 +544,8 @@ export default function BlockchainBackground() {
           ctx!.fillText(token.symbol, token.x, token.y)
         }
 
-        // 5) Hover info (only when hovered enough)
-        if (isHovered && op > 0.7) {
+        // 5) Hover info (skip in perf mode)
+        if (isHovered && op > 0.7 && !perf) {
           const infoOpacity = Math.min(1, (op - 0.7) / 0.3)
           ctx!.font = "600 11px 'Inter', sans-serif"
           ctx!.textAlign = 'center'
@@ -622,11 +637,13 @@ export default function BlockchainBackground() {
     }
   }, [])
 
+  const canvasOpacity = perfRef.current ? 0.4 : 1
+
   return (
     <canvas
       ref={canvasRef}
       className="fixed inset-0 z-0 pointer-events-none"
-      style={{ opacity: 1 }}
+      style={{ opacity: canvasOpacity, transition: 'opacity 0.5s ease' }}
     />
   )
 }

@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { Plus, Trash2, Eye, EyeOff } from 'lucide-react'
 import { listAccounts, createAccount, deleteAccount } from '../api/accounts'
@@ -122,7 +122,7 @@ export default function AccountsPage() {
         )}
       </div>
 
-      <Modal open={showCreate} onClose={() => { setShowCreate(false); setCreateError(''); setCreateSuccess(''); setTradeMode('demo') }} title="添加 OKX 账户">
+      <Modal open={showCreate} onClose={() => { setShowCreate(false); setCreateError(''); setCreateSuccess(''); setTradeMode('demo') }} title="添加 OKX 账户" wide>
         <form onSubmit={handleCreate} className="space-y-3">
           {createError && (
             <div className="bg-[#FF4060]/10 text-[#FF4060] text-xs p-3 rounded-md border border-[#FF4060]/20">{createError}</div>
@@ -134,27 +134,31 @@ export default function AccountsPage() {
             <label className="text-xs text-[#7B86A2]">账户名称</label>
             <input name="name" required placeholder="我的OKX账户" className="w-full bg-[rgba(10,15,30,0.8)] border border-[rgba(0,212,170,0.08)] rounded-md px-3 py-2 text-sm text-[#EDF0F7] mt-1 focus:outline-none focus:border-[#00D4AA]" />
           </div>
-          <div>
-            <label className="text-xs text-[#7B86A2]">API Key</label>
-            <input name="api_key" required placeholder="输入 API Key" className="w-full bg-[rgba(10,15,30,0.8)] border border-[rgba(0,212,170,0.08)] rounded-md px-3 py-2 text-sm text-[#EDF0F7] mt-1 focus:outline-none focus:border-[#00D4AA] font-mono" />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs text-[#7B86A2]">API Key</label>
+              <input name="api_key" required placeholder="输入 API Key" className="w-full bg-[rgba(10,15,30,0.8)] border border-[rgba(0,212,170,0.08)] rounded-md px-3 py-2 text-sm text-[#EDF0F7] mt-1 focus:outline-none focus:border-[#00D4AA] font-mono" />
+            </div>
+            <div>
+              <label className="text-xs text-[#7B86A2]">Secret Key</label>
+              <input name="secret_key" required type="password" placeholder="输入 Secret Key" className="w-full bg-[rgba(10,15,30,0.8)] border border-[rgba(0,212,170,0.08)] rounded-md px-3 py-2 text-sm text-[#EDF0F7] mt-1 focus:outline-none focus:border-[#00D4AA] font-mono" />
+            </div>
           </div>
-          <div>
-            <label className="text-xs text-[#7B86A2]">Secret Key</label>
-            <input name="secret_key" required type="password" placeholder="输入 Secret Key" className="w-full bg-[rgba(10,15,30,0.8)] border border-[rgba(0,212,170,0.08)] rounded-md px-3 py-2 text-sm text-[#EDF0F7] mt-1 focus:outline-none focus:border-[#00D4AA] font-mono" />
-          </div>
-          <div>
-            <label className="text-xs text-[#7B86A2]">Passphrase (可选)</label>
-            <input name="passphrase" type="password" placeholder="输入 Passphrase" className="w-full bg-[rgba(10,15,30,0.8)] border border-[rgba(0,212,170,0.08)] rounded-md px-3 py-2 text-sm text-[#EDF0F7] mt-1 focus:outline-none focus:border-[#00D4AA] font-mono" />
-          </div>
-          <div>
-            <label className="text-xs text-[#7B86A2]">交易模式</label>
-            <input type="hidden" name="trade_mode" value={tradeMode} />
-            <Dropdown
-              options={[{ value: 'demo', label: '模拟交易 (Demo)' }, { value: 'live', label: '真实交易 (Live)' }]}
-              value={tradeMode}
-              onChange={(v) => setTradeMode(String(v))}
-              className="mt-1 w-full"
-            />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs text-[#7B86A2]">Passphrase (可选)</label>
+              <input name="passphrase" type="password" placeholder="输入 Passphrase" className="w-full bg-[rgba(10,15,30,0.8)] border border-[rgba(0,212,170,0.08)] rounded-md px-3 py-2 text-sm text-[#EDF0F7] mt-1 focus:outline-none focus:border-[#00D4AA] font-mono" />
+            </div>
+            <div>
+              <label className="text-xs text-[#7B86A2]">交易模式</label>
+              <input type="hidden" name="trade_mode" value={tradeMode} />
+              <Dropdown
+                options={[{ value: 'demo', label: '模拟交易 (Demo)' }, { value: 'live', label: '真实交易 (Live)' }]}
+                value={tradeMode}
+                onChange={(v) => setTradeMode(String(v))}
+                className="mt-1 w-full"
+              />
+            </div>
           </div>
           <p className="text-xs text-[#7B86A2] leading-relaxed">
             API Key 将使用 AES-256 加密存储，仅用于程序化交易调用。建议创建仅含交易权限的 API Key。

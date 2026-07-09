@@ -24,7 +24,7 @@ export default function TopBar({ selectedAccountId, onAccountChange }: TopBarPro
   ]
 
   return (
-    <div className="h-12 flex items-center justify-between px-6 shrink-0 relative z-10 border-b border-[rgba(0,212,170,0.06)] bg-[#050711]">
+    <div className="h-12 flex items-center justify-between px-6 shrink-0 relative z-20 border-b border-[rgba(0,212,170,0.06)] bg-[#050711]">
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-1.5 text-[#7B86A2]">
           <span className="text-[10px] uppercase tracking-wider">账户</span>

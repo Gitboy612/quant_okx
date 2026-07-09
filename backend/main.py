@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from config import FRONTEND_DIR
+from config import FRONTEND_DIR, CORS_ORIGINS
 
 from database import init_db
 from routers.auth import router as auth_router
@@ -16,13 +16,14 @@ from routers.settings import router as settings_router
 from routers.monitoring import router as monitoring_router
 from routers.market import router as market_router
 from routers.maintenance import router as maintenance_router
+from routers.dsl import router as dsl_router
 from services.strategy_engine import strategy_engine
 
 app = FastAPI(title="QuantOKX", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -39,6 +40,7 @@ app.include_router(settings_router)
 app.include_router(monitoring_router)
 app.include_router(market_router)
 app.include_router(maintenance_router)
+app.include_router(dsl_router)
 
 if FRONTEND_DIR.exists():
     app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="static")

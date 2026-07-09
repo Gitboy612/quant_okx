@@ -21,4 +21,5 @@ class StrategyTemplateCreate(BaseModel):
     description: str | None = None
     default_params: dict
     param_schema: dict | None = None
+    dsl_config: dict | None = None  # 可拼接策略配置，可选
 
