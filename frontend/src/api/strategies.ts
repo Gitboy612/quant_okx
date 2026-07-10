@@ -2,6 +2,17 @@ import client from './client'
 import type { StrategyTemplate, StrategyInstance, FeasibilityResult, ApiCallLogItem } from '../types'
 import type { QSModelConfig } from '../types/dsl'
 
+export interface StrategyTemplateCreate {
+  name: string
+  strategy_type: string
+  description?: string
+  default_params: Record<string, unknown>
+  param_schema: Record<string, unknown> | null
+  dsl_config?: Record<string, unknown> | null
+  qs_model_config?: QSModelConfig
+  force?: boolean
+}
+
 export function listInstances() {
   return client.get<StrategyInstance[]>('/strategies/instances')
 }
@@ -18,17 +29,12 @@ export function listApiCallLogs(params: { strategy_instance_id?: number; limit?:
   return client.get<ApiCallLogItem[]>('/strategies/api-call-logs', { params })
 }
 
-export function createTemplate(data: {
-  name: string
-  strategy_type: string
-  description?: string
-  default_params: Record<string, unknown>
-  param_schema: Record<string, unknown> | null
-  dsl_config?: Record<string, unknown> | null
-  qs_model_config?: QSModelConfig
-  force?: boolean
-}) {
+export function createTemplate(data: StrategyTemplateCreate) {
   return client.post<StrategyTemplate>('/strategies/templates', data)
+}
+
+export function updateTemplate(id: number, body: Partial<StrategyTemplateCreate>) {
+  return client.put<StrategyTemplate>(`/strategies/templates/${id}`, body)
 }
 
 export function deleteTemplate(id: number) {

@@ -430,3 +430,26 @@ def test_registry_list_includes_label_and_display_template():
             assert "display_template" in item, (
                 f"{registry._block_type} list() 项缺少 display_template 字段"
             )
+
+
+# ============================================================
+# 基础策略 param_schema step 校验（问题 5：order_qty 输入小数）
+# ============================================================
+
+
+def test_grid_order_qty_has_step_in_blocks_api():
+    """GET /api/dsl/blocks 返回的 grid 基础策略 order_qty 含 step=0.001。
+
+    前端实例参数编辑区读取该 step 用于 <input step=...>，未声明时
+    fallback 到 1 会阻断 0.01 等小数输入。此测试锁定后端显式声明。
+    """
+    data = _fetch_blocks()
+    base_strategies = {b["kind"]: b for b in data["base_strategies"]}
+    assert "grid" in base_strategies, "base_strategies 缺少 grid"
+    grid_schema = base_strategies["grid"].get("param_schema") or {}
+    assert "order_qty" in grid_schema, "grid param_schema 缺少 order_qty"
+    order_qty = grid_schema["order_qty"]
+    assert order_qty.get("step") == 0.001, (
+        f"grid.order_qty step 期望 0.001，实际 {order_qty.get('step')!r}"
+    )
+

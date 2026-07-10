@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Plus, Play, Pause, Square, ChevronDown, Trash2, RefreshCw, FileText, X, CheckCircle, XCircle, Loader2, AlertTriangle, Search, Blocks } from 'lucide-react'
+import { Plus, Play, Pause, Square, ChevronDown, Trash2, RefreshCw, FileText, X, CheckCircle, XCircle, Loader2, AlertTriangle, Search, Blocks, Lock, Edit2, Settings } from 'lucide-react'
 import Dropdown from '../components/Dropdown'
 import {
   listInstances,
@@ -24,6 +24,72 @@ import Modal from '../components/Modal'
 import DslEditor from '../components/DslEditor'
 import type { StrategyInstance, StrategyTemplate, Account, ParamSchemaField, StrategyEvent } from '../types'
 
+// 参数字段（兼容 ParamSchemaField 与 QS-Model ParamDefinition）
+type RenderParamField = {
+  label: string
+  type: string  // 'int' | 'float' | 'number' | 'string' | 'bool' | 'select' | 'boolean'
+  default?: unknown
+  min?: number
+  max?: number
+  step?: number
+  hint?: string
+  options?: string[]
+  option_labels?: string[]
+  unit?: string
+}
+
+// NumberInput — 草稿字符串数字输入（保留输入中间态，如 "0." 不被吞）
+function NumberInput({ value, onChange, step, min, max, placeholder, className }: {
+  value: number | undefined | null
+  onChange: (val: number | undefined) => void
+  step?: string | number
+  min?: number
+  max?: number
+  placeholder?: string
+  className?: string
+}) {
+  const [draft, setDraft] = useState<string>(value != null ? String(value) : '')
+  const lastValid = useRef<number | undefined>(value ?? undefined)
+
+  // Sync external value changes (e.g., when loading a template)
+  useEffect(() => {
+    if (value != null && String(value) !== draft) {
+      setDraft(String(value))
+      lastValid.current = value
+    }
+  }, [value])
+
+  const handleBlur = () => {
+    const num = Number(draft)
+    if (draft === '' || isNaN(num)) {
+      // Revert to last valid value
+      setDraft(lastValid.current != null ? String(lastValid.current) : '')
+      onChange(lastValid.current)
+    } else {
+      let clamped = num
+      if (min != null) clamped = Math.max(min, clamped)
+      if (max != null) clamped = Math.min(max, clamped)
+      setDraft(String(clamped))
+      lastValid.current = clamped
+      onChange(clamped)
+    }
+  }
+
+  return (
+    <input
+      type="number"
+      value={draft}
+      step={step}
+      min={min}
+      max={max}
+      placeholder={placeholder}
+      className={className}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={handleBlur}
+    />
+  )
+}
+
 export default function StrategiesPage() {
   const [instances, setInstances] = useState<StrategyInstance[]>([])
   const [templates, setTemplates] = useState<StrategyTemplate[]>([])
@@ -31,6 +97,9 @@ export default function StrategiesPage() {
   const [showCreate, setShowCreate] = useState(false)
   const [showNewTemplate, setShowNewTemplate] = useState(false)
   const [showDslEditor, setShowDslEditor] = useState(false)
+  const [showTemplateMgmt, setShowTemplateMgmt] = useState(false)
+  const [editingTemplateId, setEditingTemplateId] = useState<number | null>(null)
+  const [deletingTemplateId, setDeletingTemplateId] = useState<number | null>(null)
   const [expandedId, setExpandedId] = useState<number | null>(null)
   const [creating, setCreating] = useState(false)
   const [selectedTemplateId, setSelectedTemplateId] = useState<number | null>(null)
@@ -108,7 +177,33 @@ export default function StrategiesPage() {
   const activeAccounts = accounts.filter((a) => a.is_active)
 
   const selectedTemplate = templates.find((t) => t.id === selectedTemplateId)
-  const paramSchema = (selectedTemplate?.param_schema ?? {}) as Record<string, ParamSchemaField>
+  // QS-Model 币对锁定：模板 meta.base_symbol 非空时，新建实例 symbol 锁定为该值
+  const lockedBaseSymbol = selectedTemplate?.qs_model_config?.meta?.base_symbol?.trim() || ''
+  // 参数 schema 取值：优先 param_schema；为空（null/undefined/{}）时从 qs_model_config.params 构建
+  const paramSchema: Record<string, RenderParamField> = (() => {
+    const ps = selectedTemplate?.param_schema
+    if (ps && Object.keys(ps).length > 0) {
+      return ps as Record<string, RenderParamField>
+    }
+    const qsParams = selectedTemplate?.qs_model_config?.params
+    const built: Record<string, RenderParamField> = {}
+    if (qsParams) {
+      for (const [key, def] of Object.entries(qsParams)) {
+        built[key] = {
+          label: def.label,
+          type: def.type,
+          default: def.value,
+          min: def.range?.[0],
+          max: def.range?.[1],
+          hint: def.description,
+          options: def.options as string[] | undefined,
+          option_labels: def.option_labels,
+          unit: def.unit,
+        }
+      }
+    }
+    return built
+  })()
 
   useEffect(() => {
     if (selectedTemplate) {
@@ -119,6 +214,15 @@ export default function StrategiesPage() {
       setCustomParams(defaults)
     }
   }, [selectedTemplateId])
+
+  // 模板币对锁定：selectedTemplate 含非空 meta.base_symbol 时，强制 symbol 输入为该值
+  useEffect(() => {
+    if (lockedBaseSymbol) {
+      setSymbolSearch(lockedBaseSymbol)
+      setCustomParams((prev) => ({ ...prev, symbol: lockedBaseSymbol }))
+      setShowSymbolDropdown(false)
+    }
+  }, [lockedBaseSymbol])
 
   const [feasibilityMsg, setFeasibilityMsg] = useState<string | null>(null)
   const [startingId, setStartingId] = useState<number | null>(null)
@@ -187,6 +291,36 @@ export default function StrategiesPage() {
     setActionLoading(null)
   }
 
+  const handleDeleteTemplate = async (id: number) => {
+    if (!window.confirm('确定删除该模板？此操作不可撤销。')) return
+    setDeletingTemplateId(id)
+    try {
+      await deleteTemplate(id)
+      showToast('success', '模板已删除')
+      loadData()
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      showToast('error', detail || '删除模板失败')
+    }
+    setDeletingTemplateId(null)
+  }
+
+  const handleEditTemplate = (id: number) => {
+    setEditingTemplateId(id)
+    setShowTemplateMgmt(false)
+    setShowDslEditor(true)
+  }
+
+  const handleOpenNewDslEditor = () => {
+    setEditingTemplateId(null)
+    setShowDslEditor(true)
+  }
+
+  const handleCloseDslEditor = () => {
+    setShowDslEditor(false)
+    setEditingTemplateId(null)
+  }
+
   const handleCreate = async () => {
     if (!selectedTemplateId || !selectedAccountForCreate) return
     setCreating(true)
@@ -245,7 +379,30 @@ export default function StrategiesPage() {
 
   const getInstanceSchema = (inst: StrategyInstance) => {
     const tpl = templates.find((t) => t.id === inst.template_id)
-    return (tpl?.param_schema ?? {}) as Record<string, ParamSchemaField>
+    const ps = tpl?.param_schema
+    if (ps && Object.keys(ps).length > 0) {
+      return ps as Record<string, ParamSchemaField>
+    }
+    // QS-Model 模板：从 qs_model_config.params 动态构建 schema
+    const qsParams = tpl?.qs_model_config?.params
+    const built: Record<string, RenderParamField> = {}
+    if (qsParams) {
+      for (const [key, def] of Object.entries(qsParams)) {
+        built[key] = {
+          label: def.label,
+          type: def.type,
+          default: def.value,
+          min: def.range?.[0],
+          max: def.range?.[1],
+          step: def.type === 'int' ? 1 : undefined,
+          hint: def.description,
+          options: def.options as string[] | undefined,
+          option_labels: def.option_labels,
+          unit: def.unit,
+        }
+      }
+    }
+    return built
   }
 
   return (
@@ -260,7 +417,13 @@ export default function StrategiesPage() {
             <FileText className="w-4 h-4" /> 自定义模板
           </button>
           <button
-            onClick={() => setShowDslEditor(true)}
+            onClick={() => setShowTemplateMgmt(true)}
+            className="flex items-center gap-2 border border-[#1E1E28] text-[#E8E8ED] rounded-lg px-4 py-2 text-sm font-medium hover:bg-[#1A1A24] transition-colors"
+          >
+            <Settings className="w-4 h-4" /> 模板管理
+          </button>
+          <button
+            onClick={handleOpenNewDslEditor}
             className="flex items-center gap-2 border border-[#1E1E28] text-[#E8E8ED] rounded-lg px-4 py-2 text-sm font-medium hover:bg-[#1A1A24] transition-colors"
           >
             <Blocks className="w-4 h-4" /> QS-Model 策略构建
@@ -437,19 +600,33 @@ export default function StrategiesPage() {
                                     }}
                                     className="mt-1 w-full"
                                   />
-                                ) : (
-                                  <input
-                                    type={field?.type === 'number' ? 'number' : 'text'}
-                                    step={field?.step ?? 1}
+                                ) : field?.type === 'number' ? (
+                                  <NumberInput
+                                    value={typeof value === 'number' ? value : undefined}
+                                    onChange={(v) => {
+                                      setInstances((prev) =>
+                                        prev.map((pi) =>
+                                          pi.id === inst.id
+                                            ? { ...pi, params: { ...pi.params, [key]: v } }
+                                            : pi,
+                                        ),
+                                      )
+                                    }}
+                                    step={field?.step ?? (field?.type === 'int' || field?.type === 'integer' ? 1 : 'any')}
                                     min={field?.min}
                                     max={field?.max}
+                                    className="w-full bg-[#0C0C14] border border-[#1E1E28] rounded-md px-3 py-1.5 text-sm text-[#E8E8ED] focus:outline-none focus:border-[#00D4AA] mt-1 font-mono"
+                                  />
+                                ) : (
+                                  <input
+                                    type="text"
                                     value={String(value)}
                                     onChange={(e) => {
                                       const raw = e.target.value
                                       setInstances((prev) =>
                                         prev.map((pi) =>
                                           pi.id === inst.id
-                                            ? { ...pi, params: { ...pi.params, [key]: field?.type === 'number' ? Number(raw) : raw } }
+                                            ? { ...pi, params: { ...pi.params, [key]: raw } }
                                             : pi,
                                         ),
                                       )
@@ -535,23 +712,38 @@ export default function StrategiesPage() {
             </div>
 
             <div>
-              <label className="text-xs text-[#6B6B7B]">交易对</label>
+              <label className="text-xs text-[#6B6B7B]">
+                交易对
+                {lockedBaseSymbol && (
+                  <span className="ml-2 text-[10px] text-[#F0A500] border border-[#F0A500]/30 rounded px-1.5 py-0.5">已锁定</span>
+                )}
+              </label>
               <div className="relative" ref={symbolDropdownRef}>
                 <div className="relative">
                   <input
-                    value={symbolSearch}
+                    value={lockedBaseSymbol || symbolSearch}
                     onChange={(e) => {
+                      if (lockedBaseSymbol) return
                       setSymbolSearch(e.target.value)
                       setCustomParams((prev) => ({ ...prev, symbol: e.target.value }))
                       setShowSymbolDropdown(true)
                     }}
-                    onFocus={() => setShowSymbolDropdown(true)}
+                    onFocus={() => { if (!lockedBaseSymbol) setShowSymbolDropdown(true) }}
+                    readOnly={Boolean(lockedBaseSymbol)}
                     placeholder="搜索或输入交易对，如 BTC-USDT-SWAP"
-                    className="w-full bg-[#0C0C14] border border-[#1E1E28] rounded-md px-3 py-2 text-sm text-[#E8E8ED] mt-1 focus:outline-none focus:border-[#00D4AA] font-mono"
+                    className={`w-full border border-[#1E1E28] rounded-md px-3 py-2 text-sm mt-1 focus:outline-none font-mono ${
+                      lockedBaseSymbol
+                        ? 'bg-[#1A1A24] text-[#6B6B7B] cursor-not-allowed'
+                        : 'bg-[#0C0C14] text-[#E8E8ED] focus:border-[#00D4AA]'
+                    }`}
                   />
-                  <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#6B6B7B]" />
+                  {lockedBaseSymbol ? (
+                    <Lock className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#F0A500]" />
+                  ) : (
+                    <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#6B6B7B]" />
+                  )}
                 </div>
-                {showSymbolDropdown && (
+                {showSymbolDropdown && !lockedBaseSymbol && (
                   <div className="absolute z-10 mt-1 w-full bg-[#14141A] border border-[#1E1E28] rounded-md shadow-lg max-h-60 overflow-y-auto">
                     {contractSymbols.length > 0 && (
                       <>
@@ -604,42 +796,84 @@ export default function StrategiesPage() {
             <div className="border-t border-[#1E1E28] pt-3">
               <div className="text-xs text-[#6B6B7B] mb-3 uppercase tracking-wide">参数配置</div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {Object.entries(paramSchema).map(([key, field]) => (
-                  <div key={key}>
-                    <label className="text-xs text-[#6B6B7B]" title={field.hint}>
-                      {field.label}
-                    </label>
-                    {field.hint && (
-                      <span className="text-xs text-[#6B6B7B]/50 ml-1">({field.hint})</span>
-                    )}
-                    {field.type === 'select' && field.options ? (
-                      <Dropdown
-                        options={field.options.map((opt: string) => ({ value: opt, label: opt }))}
-                        value={String(customParams[key] ?? field.default)}
-                        onChange={(v) => {
-                          setCustomParams((prev) => ({ ...prev, [key]: isNaN(Number(v)) ? v : Number(v) }))
-                        }}
-                        className="mt-1 w-full"
-                      />
-                    ) : (
-                      <input
-                        type={field.type === 'number' ? 'number' : 'text'}
-                        step={field.step ?? 1}
-                        min={field.min}
-                        max={field.max}
-                        value={String(customParams[key] ?? field.default)}
-                        onChange={(e) => {
-                          const raw = e.target.value
-                          setCustomParams((prev) => ({
-                            ...prev,
-                            [key]: field.type === 'number' ? Number(raw) : raw,
-                          }))
-                        }}
-                        className="w-full bg-[#0C0C14] border border-[#1E1E28] rounded-md px-3 py-1.5 text-sm text-[#E8E8ED] mt-1 focus:outline-none focus:border-[#00D4AA] font-mono"
-                      />
-                    )}
-                  </div>
-                ))}
+                {Object.entries(paramSchema).map(([key, field]) => {
+                  const ftype = field.type
+                  const isInt = ftype === 'int'
+                  const isNumeric = ftype === 'int' || ftype === 'float' || ftype === 'number'
+                  const isBool = ftype === 'bool' || ftype === 'boolean'
+                  const isSelect = ftype === 'select'
+                  const optionLabels = field.option_labels
+                  const step = field.step ?? (isInt ? 1 : 'any')
+                  return (
+                    <div key={key}>
+                      <label className="text-xs text-[#6B6B7B]" title={field.hint}>
+                        {field.label}
+                      </label>
+                      {field.unit ? (
+                        <span className="text-xs text-[#6B6B7B]/50 ml-1">({field.unit})</span>
+                      ) : field.hint ? (
+                        <span className="text-xs text-[#6B6B7B]/50 ml-1">({field.hint})</span>
+                      ) : null}
+                      {isSelect && field.options ? (
+                        <Dropdown
+                          options={field.options.map((opt: string, idx: number) => ({
+                            value: opt,
+                            label: optionLabels?.[idx] ?? opt,
+                          }))}
+                          value={String(customParams[key] ?? field.default ?? '')}
+                          onChange={(v) => {
+                            setCustomParams((prev) => ({
+                              ...prev,
+                              [key]: isNaN(Number(v)) ? v : Number(v),
+                            }))
+                          }}
+                          className="mt-1 w-full"
+                        />
+                      ) : isBool ? (
+                        <div className="mt-1 flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(customParams[key] ?? field.default)}
+                            onChange={(e) => {
+                              setCustomParams((prev) => ({ ...prev, [key]: e.target.checked }))
+                            }}
+                            className="w-4 h-4 accent-[#00D4AA]"
+                          />
+                          <span className="text-xs text-[#6B6B7B]">
+                            {Boolean(customParams[key] ?? field.default) ? '开启' : '关闭'}
+                          </span>
+                        </div>
+                      ) : isNumeric ? (
+                        <NumberInput
+                          value={typeof customParams[key] === 'number' ? (customParams[key] as number) : (typeof field.default === 'number' ? field.default : undefined)}
+                          onChange={(v) => {
+                            setCustomParams((prev) => ({
+                              ...prev,
+                              [key]: v,
+                            }))
+                          }}
+                          step={step}
+                          min={field.min}
+                          max={field.max}
+                          className="w-full bg-[#0C0C14] border border-[#1E1E28] rounded-md px-3 py-1.5 text-sm text-[#E8E8ED] mt-1 focus:outline-none focus:border-[#00D4AA] font-mono"
+                        />
+                      ) : (
+                        <input
+                          type="text"
+                          value={String(customParams[key] ?? field.default ?? '')}
+                          onChange={(e) => {
+                            const raw = e.target.value
+                            setCustomParams((prev) => ({
+                              ...prev,
+                              [key]: raw,
+                            }))
+                          }}
+                          className="w-full bg-[#0C0C14] border border-[#1E1E28] rounded-md px-3 py-1.5 text-sm text-[#E8E8ED] mt-1 focus:outline-none focus:border-[#00D4AA] font-mono"
+                        />
+                      )}
+                    </div>
+                  )
+                })}
               </div>
             </div>
 
@@ -661,8 +895,18 @@ export default function StrategiesPage() {
       />
       <DslEditor
         open={showDslEditor}
-        onClose={() => setShowDslEditor(false)}
+        onClose={handleCloseDslEditor}
         onSaved={loadData}
+        editingTemplateId={editingTemplateId}
+        templates={templates}
+      />
+      <TemplateMgmtModal
+        open={showTemplateMgmt}
+        onClose={() => setShowTemplateMgmt(false)}
+        templates={templates}
+        onEdit={handleEditTemplate}
+        onDelete={handleDeleteTemplate}
+        deletingTemplateId={deletingTemplateId}
       />
     </div>
   )
@@ -855,6 +1099,81 @@ function NewTemplateModal({
         >
           {saving ? '保存中...' : '保存自定义模板'}
         </button>
+      </div>
+    </Modal>
+  )
+}
+
+function TemplateMgmtModal({
+  open,
+  onClose,
+  templates,
+  onEdit,
+  onDelete,
+  deletingTemplateId,
+}: {
+  open: boolean
+  onClose: () => void
+  templates: StrategyTemplate[]
+  onEdit: (id: number) => void
+  onDelete: (id: number) => Promise<void>
+  deletingTemplateId: number | null
+}) {
+  // 只展示自定义模板（过滤掉内置硬编码策略模板）
+  const customTemplates = templates.filter((t) => !t.is_builtin)
+
+  return (
+    <Modal open={open} onClose={onClose} title="模板管理" wide>
+      <div className="space-y-2">
+        {customTemplates.length === 0 ? (
+          <div className="text-sm text-[#6B6B7B] text-center py-8">暂无自定义模板</div>
+        ) : (
+          customTemplates.map((t) => {
+            const isQsModel = t.qs_model_config != null
+            const hashShort = t.logic_hash ? t.logic_hash.slice(0, 8) : null
+            const isDeleting = deletingTemplateId === t.id
+            return (
+              <div
+                key={t.id}
+                className="flex items-center gap-3 bg-[#0C0C14] border border-[#1E1E28] rounded-md p-3"
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm text-[#E8E8ED] font-medium truncate">{t.name}</div>
+                  <div className="text-xs text-[#6B6B7B] mt-0.5 flex items-center gap-2 flex-wrap">
+                    <span className="font-mono">{t.strategy_type}</span>
+                    {hashShort && (
+                      <span className="font-mono text-[#6B6B7B]/70">#{hashShort}</span>
+                    )}
+                    {isQsModel ? (
+                      <span className="text-[#00D4AA] border border-[#00D4AA]/20 rounded px-1 py-0.5 text-[10px]">QS-Model</span>
+                    ) : (
+                      <span className="text-[#6B6B7B] border border-[#1E1E28] rounded px-1 py-0.5 text-[10px]">参数定义</span>
+                    )}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onEdit(t.id)}
+                  disabled={!isQsModel}
+                  title={isQsModel ? '编辑模板' : '非 QS-Model 模板不支持编辑'}
+                  className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-md border border-[#1E1E28] text-[#E8E8ED] hover:bg-[#1A1A24] disabled:opacity-40 disabled:cursor-not-allowed transition-colors shrink-0"
+                >
+                  <Edit2 className="w-3.5 h-3.5" /> 编辑
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onDelete(t.id)}
+                  disabled={isDeleting}
+                  title="删除模板"
+                  className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-md border border-[#1E1E28] text-[#FF4757] hover:bg-[#FF4757]/10 disabled:opacity-50 transition-colors shrink-0"
+                >
+                  {isDeleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                  删除
+                </button>
+              </div>
+            )
+          })
+        )}
       </div>
     </Modal>
   )

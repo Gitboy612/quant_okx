@@ -12,6 +12,15 @@ interface LogFile {
   modified: string
 }
 
+// 防御性解析：OKX API 返回时间为 UTC，后端 Task 16 已输出带 Z 的 UTC 字符串，
+// 但旧数据可能不带时区标记，此时按 UTC 解析避免被当作本地时间。
+function parseUTC(dateStr: string): Date {
+  if (/Z$|[+-]\d{2}:\d{2}$/.test(dateStr)) {
+    return new Date(dateStr)
+  }
+  return new Date(dateStr + 'Z')
+}
+
 export default function ApiLogsPage() {
   const [logs, setLogs] = useState<ApiCallLogItem[]>([])
   const [files, setFiles] = useState<LogFile[]>([])
@@ -60,14 +69,17 @@ export default function ApiLogsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm font-medium text-[#EDF0F7]">API 调用日志</h2>
-        <button
-          onClick={loadData}
-          className="flex items-center gap-2 border border-[rgba(0,212,170,0.08)] text-[#EDF0F7] rounded-lg px-4 py-2 text-sm font-medium hover:bg-[rgba(0,212,170,0.06)] transition-colors"
-        >
-          <RefreshCw className="w-4 h-4" /> 刷新
-        </button>
+      <div>
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-medium text-[#EDF0F7]">API 调用日志</h2>
+          <button
+            onClick={loadData}
+            className="flex items-center gap-2 border border-[rgba(0,212,170,0.08)] text-[#EDF0F7] rounded-lg px-4 py-2 text-sm font-medium hover:bg-[rgba(0,212,170,0.06)] transition-colors"
+          >
+            <RefreshCw className="w-4 h-4" /> 刷新
+          </button>
+        </div>
+        <p className="text-xs text-[#7B86A2] mt-2">OKX API 返回时间为 UTC，已转换为本地时间（UTC+8）显示</p>
       </div>
 
       <motion.div
@@ -129,7 +141,7 @@ export default function ApiLogsPage() {
             <table className="w-full text-xs">
               <thead className="sticky top-0 bg-[rgba(10,15,30,0.75)]">
                 <tr className="text-[#7B86A2] uppercase tracking-wide">
-                  <th className="text-left py-2 pr-4 whitespace-nowrap">时间</th>
+                  <th className="text-left py-2 pr-4 whitespace-nowrap">时间 (本地 UTC+8)</th>
                   <th className="text-left py-2 pr-4 whitespace-nowrap">账户</th>
                   <th className="text-left py-2 pr-4 whitespace-nowrap">方法</th>
                   <th className="text-left py-2 pr-4 whitespace-nowrap">端点</th>
@@ -142,7 +154,13 @@ export default function ApiLogsPage() {
                 {logs.map((l) => (
                   <tr key={l.id} className="border-t border-[rgba(0,212,170,0.08)]/40 hover:bg-[rgba(0,212,170,0.06)] transition-colors">
                     <td className="py-2 pr-4 text-[#7B86A2] font-mono whitespace-nowrap">
-                      {new Date(l.created_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                      {parseUTC(l.created_at).toLocaleString('zh-CN', {
+                        month: '2-digit',
+                        day: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        second: '2-digit',
+                      })}
                     </td>
                     <td className="py-2 pr-4 whitespace-nowrap">{l.account_name || '-'}</td>
                     <td className="py-2 pr-4 font-mono whitespace-nowrap">{l.method}</td>

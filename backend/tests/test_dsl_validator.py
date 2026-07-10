@@ -185,6 +185,65 @@ def test_valid_multiple_rules():
 
 
 # ============================================================
+# 纯规则策略（base_strategy=None，Task 4）
+# ============================================================
+
+
+def test_valid_pure_rule_strategy():
+    """无 base_strategy 但有至少一条规则 → 通过（纯规则策略）。"""
+    config = {
+        "version": "1.0",
+        "base_strategy": None,
+        "rules": [
+            {
+                "name": "定时记录",
+                "when": {
+                    "mode": "event",
+                    "event": {"kind": "on_interval", "args": {"seconds": 60}},
+                },
+                "then": [{"kind": "log_event", "args": {"message": "tick 检查"}}],
+            }
+        ],
+    }
+    result = _validate(config)
+    assert result.valid, f"应通过校验，但得到错误: {[e.__dict__ for e in result.errors]}"
+    assert result.errors == []
+
+
+def test_valid_pure_rule_strategy_no_base_key():
+    """完全省略 base_strategy 键（默认 None）且有规则 → 通过。"""
+    config = {
+        "version": "1.0",
+        "rules": [
+            {
+                "name": "r1",
+                "when": {
+                    "mode": "event",
+                    "event": {"kind": "on_tick", "args": {"symbol": "BTC-USDT"}},
+                },
+                "then": [{"kind": "hold_position"}],
+            }
+        ],
+    }
+    result = _validate(config)
+    assert result.valid, f"应通过校验，但得到错误: {[e.__dict__ for e in result.errors]}"
+
+
+def test_invalid_pure_rule_strategy_no_rules():
+    """无 base_strategy 且 rules=[] → NO_BASE_NO_RULES。"""
+    config = {
+        "version": "1.0",
+        "base_strategy": None,
+        "rules": [],
+    }
+    result = _validate(config)
+    assert not result.valid
+    assert _has_error(result, "reference", "NO_BASE_NO_RULES")
+    err = next(e for e in result.errors if e.code == "NO_BASE_NO_RULES")
+    assert "rules" in err.path
+
+
+# ============================================================
 # 结构校验（structure）
 # ============================================================
 
@@ -203,11 +262,15 @@ def test_invalid_version():
 
 
 def test_invalid_missing_base_strategy():
-    """缺少必填 base_strategy，结构校验失败。"""
+    """无 base_strategy 且无 rules → NO_BASE_NO_RULES（纯规则策略必须有规则）。
+
+    Task 2 已将 base_strategy 改为可选，故结构层不再报错；
+    引用层校验：无基础策略时至少需要一条规则。
+    """
     config = {"version": "1.0", "rules": []}
     result = _validate(config)
     assert not result.valid
-    assert _has_error(result, "structure", "SCHEMA_ERROR")
+    assert _has_error(result, "reference", "NO_BASE_NO_RULES")
 
 
 # ============================================================

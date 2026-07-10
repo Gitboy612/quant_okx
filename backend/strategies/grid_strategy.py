@@ -67,9 +67,27 @@ class GridStrategy(BaseStrategy):
             if grid_idx in self._active_sell_orders:
                 del self._active_sell_orders[grid_idx]
 
-            buy_px_for_pnl = self._grid_levels[grid_idx - 1] if grid_idx > 0 else self._grid_levels[grid_idx] - self._grid_step
-            cycle_pnl = (px - buy_px_for_pnl) * sz
-            self.add_realized_pnl(cycle_pnl)
+            if grid_idx == 0:
+                # 边界防护：grid_idx=0 不应出现卖单成交，跳过 realized 计算
+                self._record_event("order_warn",
+                                   f"grid_idx=0 出现卖单成交，跳过 realized 计算: {symbol} ordId={ordId} px={px} qty={sz}",
+                                   {"order_id": ordId, "side": "sell", "price": px, "quantity": sz, "grid_idx": 0})
+            else:
+                # 查找对应买单的实际成交价
+                buy_ord_id = self._active_buy_orders.get(grid_idx - 1, "")
+                buy_fill_px = self.order_manager.get_order_fill_px(buy_ord_id) if buy_ord_id else 0.0
+                if buy_fill_px > 0:
+                    buy_px_for_pnl = buy_fill_px
+                else:
+                    # fillPx 缺失时回退使用网格档位价
+                    buy_px_for_pnl = self._grid_levels[grid_idx - 1]
+                    self._record_event("order_warn",
+                                       f"买单 fillPx 缺失，回退使用网格档位价: grid_idx={grid_idx} buy_ord_id={buy_ord_id} fallback_px={buy_px_for_pnl}",
+                                       {"grid_idx": grid_idx, "buy_ord_id": buy_ord_id, "fallback_px": buy_px_for_pnl})
+                buy_fee = self.order_manager.get_order_fee(buy_ord_id) if buy_ord_id else 0.0
+                sell_fee = self.order_manager.get_order_fee(ordId)
+                cycle_pnl = (px - buy_px_for_pnl) * sz - buy_fee - sell_fee
+                self.add_realized_pnl(cycle_pnl)
             self.record_order(symbol, "sell", "limit", px, sz, order_id=ordId, status="filled")
 
             buy_price = round(round((self._grid_levels[grid_idx] - self._grid_step) / self._grid_tick_size) * self._grid_tick_size, self._grid_tick_decimals)
@@ -317,15 +335,38 @@ class GridStrategy(BaseStrategy):
                 # Rebuild active_buy_orders and active_sell_orders from OrderManager
                 self._rebuild_active_dicts(symbol)
 
-                # Calculate unrealized PnL from active buy orders
-                unrealized_pnl = 0.0
-                for idx in self._active_buy_orders:
-                    buy_price = self._grid_levels[idx]
-                    unrealized_pnl += (current_price - buy_price) * self._grid_order_qty
+                # 基于净持仓计算未实现盈亏（非挂单）
+                net_position, avg_buy_price = self.order_manager.get_position_summary()
+                if "-SWAP" in symbol:
+                    # 合约优先用 OKX positions 接口的 upl
+                    try:
+                        positions = await self.client.get_positions()
+                        unrealized_pnl = 0.0
+                        for pos in positions:
+                            pos_inst = pos.get("instId") if isinstance(pos, dict) else getattr(pos, "instId", None)
+                            if pos_inst == symbol:
+                                upl = pos.get("upl") if isinstance(pos, dict) else getattr(pos, "upl", None)
+                                if upl is not None:
+                                    unrealized_pnl = float(upl)
+                                break
+                    except Exception:
+                        # 接口失败时用本地净持仓兜底
+                        unrealized_pnl = (current_price - avg_buy_price) * net_position if net_position != 0 else 0.0
+                else:
+                    # 现货用本地净持仓计算
+                    unrealized_pnl = (current_price - avg_buy_price) * net_position if net_position != 0 else 0.0
+
+                # 扣除预估平仓手续费，使成交前后口径一致
+                if net_position != 0:
+                    estimated_close_fee = abs(net_position) * current_price * self._fee_rate
+                    unrealized_pnl -= estimated_close_fee
 
                 realized_pnl = self.get_realized_pnl()
                 total_equity = self._initial_equity + realized_pnl + unrealized_pnl
-                self.record_pnl(total_equity, unrealized_pnl, realized_pnl)
+                total_pnl = unrealized_pnl + realized_pnl
+                if self._should_record_pnl(total_pnl):
+                    self.record_pnl(total_equity, unrealized_pnl, realized_pnl)
+                    self._mark_pnl_recorded(total_pnl)
 
                 consecutive_errors = 0
 
@@ -334,8 +375,9 @@ class GridStrategy(BaseStrategy):
                 error_msg = str(e)
                 # 判断是否网络异常
                 is_network_error = any(kw in error_msg.lower() for kw in [
-                    "winerror 10060", "winerror 10061", "timed out", "connection refused",
-                    "ssl", "eof", "network", "connect", "timeout", "unreachable"
+                    "winerror 64", "winerror 10054", "winerror 10060", "winerror 10061",
+                    "timed out", "connection refused", "ssl", "eof", "network", "connect",
+                    "timeout", "unreachable"
                 ])
 
                 if is_network_error:

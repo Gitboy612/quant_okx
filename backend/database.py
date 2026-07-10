@@ -45,6 +45,17 @@ def _migrate_strategy_instances_logic_hash():
             conn.execute(text("ALTER TABLE strategy_instances ADD COLUMN logic_hash VARCHAR"))
 
 
+def _migrate_pnl_records_is_final():
+    """确保 pnl_records 表包含 is_final 列（向后兼容迁移）。"""
+    insp = inspect(engine)
+    if "pnl_records" not in insp.get_table_names():
+        return
+    existing_columns = {c["name"] for c in insp.get_columns("pnl_records")}
+    if "is_final" not in existing_columns:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE pnl_records ADD COLUMN is_final BOOLEAN DEFAULT 0 NOT NULL"))
+
+
 def init_db():
     from models.user import User
     from models.account import Account
@@ -60,6 +71,7 @@ def init_db():
     Base.metadata.create_all(bind=engine)
     _migrate_strategy_templates_dsl_config()
     _migrate_strategy_instances_logic_hash()
+    _migrate_pnl_records_is_final()
 
 
 def get_db():

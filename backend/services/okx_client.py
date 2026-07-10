@@ -44,10 +44,7 @@ class OKXClient:
             proxy=effective_proxy,
             transport=self._make_transport(),
         )
-        # 仅在进程内首次创建时同步，且静默（异步客户端会记录日志）
-        if not OKXClient._synced:
-            self._sync_time(silent=True)
-            OKXClient._synced = True
+        self._time_synced = False
 
         self._async_client = OKXBaseClient(
             api_key=self.api_key,
@@ -133,6 +130,11 @@ class OKXClient:
                     self._log_system("SYNC_TIME_ERR", f"attempt={attempt+1} {e}")
             time.sleep(1)
         return False
+
+    async def _ensure_time_synced(self):
+        if not self._time_synced:
+            await asyncio.to_thread(self._sync_time)
+            self._time_synced = True
 
     def _sign(self, timestamp: str, method: str, path: str, body: str = "") -> str:
         message = timestamp + method + path + body
@@ -268,18 +270,22 @@ class OKXClient:
             pass
 
     async def get_balance(self) -> dict:
+        await self._ensure_time_synced()
         return await self.account.get_balance(ccy=None)
 
     async def get_positions(self) -> list:
         return await self.account.get_positions()
 
     async def get_ticker(self, inst_id: str) -> list:
+        await self._ensure_time_synced()
         return await self.market.get_ticker(instId=inst_id)
 
     async def get_candles(self, inst_id: str, bar: str = "1m", limit: str = "100") -> list:
+        await self._ensure_time_synced()
         return await self.market.get_candles(instId=inst_id, bar=bar, limit=limit)
 
     async def place_order(self, inst_id: str, side: str, ord_type: str, sz: str, px: str | None = None) -> dict:
+        await self._ensure_time_synced()
         body_px = px if (px and ord_type == "limit") else None
         return await self.trade.place_order(
             instId=inst_id,
@@ -291,6 +297,7 @@ class OKXClient:
         )
 
     async def batch_place_orders(self, orders: list[dict]) -> dict:
+        await self._ensure_time_synced()
         processed_orders = []
         for o in orders:
             item = {
@@ -306,13 +313,17 @@ class OKXClient:
         return await self.trade.batch_place_orders(orders=processed_orders)
 
     async def cancel_order(self, inst_id: str, order_id: str) -> dict:
+        await self._ensure_time_synced()
         return await self.trade.cancel_order(instId=inst_id, ordId=order_id)
 
     async def get_order(self, inst_id: str, order_id: str) -> list:
+        await self._ensure_time_synced()
         return await self.trade.get_order(instId=inst_id, ordId=order_id)
 
     async def get_pending_orders(self, inst_id: str | None = None) -> list:
+        await self._ensure_time_synced()
         return await self.trade.get_pending_orders(instId=inst_id)
 
     async def get_orders_history(self, inst_id: str, limit: str = "50") -> list:
+        await self._ensure_time_synced()
         return await self.trade.get_orders_history(instId=inst_id, limit=limit)

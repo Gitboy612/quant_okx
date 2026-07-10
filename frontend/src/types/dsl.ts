@@ -57,7 +57,7 @@ export interface Rule {
 }
 
 export interface BaseStrategyRef {
-  kind: string
+  kind: string | null
   params: Record<string, unknown>
 }
 
@@ -125,12 +125,14 @@ export interface QSModelMeta {
 export interface ParamDefinition {
   label: string
   value: any
-  type: 'int' | 'float' | 'string' | 'bool' | 'select'
+  type: 'int' | 'float' | 'number' | 'string' | 'bool' | 'select'
   range?: [number, number]
   description?: string
   options?: any[]
   option_labels?: string[]
   unit?: string
+  /** 标签来源：'auto'=引用自动同步，'custom'=用户手动设定。前端态，可选不入库。 */
+  label_source?: 'auto' | 'custom'
 }
 
 // 风控过滤
@@ -138,6 +140,8 @@ export interface RiskFilter {
   max_position_ratio?: number
   daily_max_loss?: number
   min_trade_size?: number
+  stop_loss?: number
+  take_profit?: number
   blacklist_hours?: string[]
 }
 

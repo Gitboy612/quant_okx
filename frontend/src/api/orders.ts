@@ -7,6 +7,7 @@ export function listOrders(params: {
   symbol?: string
   status?: string
   limit?: number
+  sort_by?: string
 }) {
   return client.get<Order[]>('/orders', { params })
 }

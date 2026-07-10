@@ -26,8 +26,12 @@ check(ctx) 以保留跨 tick 状态（队列 / 上次触发时间）；缓存不
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import time
 from typing import Any
+
+import httpx
 
 from strategies.base_strategy import BaseStrategy
 from dsl.schema import (
@@ -67,6 +71,12 @@ from dsl.blocks.events import check_event
 from dsl.blocks.actions import execute_action
 
 
+# FSM 编译缓存：logic_hash -> FSM（进程级共享）。
+# FSM 为编译产物（states/transitions 编译后不再修改），不含实例运行态，
+# 可安全跨实例复用，避免同 logic_hash 的多个实例每次启动都重复编译。
+_fsm_cache: dict[str, FSM] = {}
+
+
 class ComposableStrategy(BaseStrategy):
     """可拼接策略执行器，作为 _strategy_map['composable'] 的实现。
 
@@ -100,8 +110,24 @@ class ComposableStrategy(BaseStrategy):
         self._active_rules: set[str] = set()
         # 缓存的最新价（每个 tick 刷新，供 on_start / 指标复用）
         self._last_price: float = 0.0
+        # 当前 FSM 状态名（用于 _enter_state 检测自环转换，
+        # 自环不触发生命周期钩子 on_pause/on_resume/on_stop）
+        self._current_state: str | None = None
+        # 最近一次 tick 的 ExecutionContext（供 push 型回调如
+        # on_order_filled 在非 tick 时机复用）
+        self._latest_ctx: ExecutionContext | None = None
         # QS-Model 风控段（若提供），供后续风控逻辑读取
         self._risk_filter: RiskFilter | None = None
+        # 当日已实现盈亏基线（按 UTC 日期重置，用于 daily_max_loss 检查）
+        self._daily_pnl_baseline: float = 0.0
+        self._daily_reset_date: str = ""
+        # —— 主循环网络韧性（Task 5）——
+        # 连续网络错误计数：达到 _max_consecutive_errors 后自动停止
+        self._consecutive_errors: int = 0
+        # 当前退避延迟（秒），网络错误时指数倍增，上限 30s
+        self._backoff_delay: float = 1.0
+        # 触发自动停止的连续网络错误阈值
+        self._max_consecutive_errors: int = 10
 
     # ============================================================
     # 参数校验
@@ -165,6 +191,11 @@ class ComposableStrategy(BaseStrategy):
 
         if qs_model_config:
             qs_model = QSModelConfig.model_validate(qs_model_config)
+            # 模板 base_symbol 为空时，用实例级 symbol 兜底，
+            # 确保 $meta.base_symbol 引用能解析为实际交易对
+            instance_symbol = self.params.get("symbol", "")
+            if not qs_model.meta.base_symbol and instance_symbol:
+                qs_model.meta.base_symbol = instance_symbol
             # 收集实例参数覆盖（self.params 中与 qs_model.params 同名的键）
             param_overrides: dict[str, Any] = {}
             for key in qs_model.params:
@@ -217,9 +248,29 @@ class ComposableStrategy(BaseStrategy):
             )
             return
 
-        # 3. 编译为 FSM
+        # 3. 编译为 FSM（带 logic_hash 缓存：同 logic_hash 复用，避免重复编译）
         try:
-            self._fsm = FSMCompiler().compile(self._dsl)
+            logic_hash = self.params.get("logic_hash")
+            if not logic_hash:
+                # 实例未携带预计算的 logic_hash，现场基于解析后的 DSL 计算
+                # （QSModelConfig.logic 不存在于已解析的 StrategyDSL 上，回退到整个 dsl）
+                logic_source = getattr(self._dsl, "logic", None) or self._dsl
+                logic_data = (
+                    logic_source.model_dump()
+                    if hasattr(logic_source, "model_dump")
+                    else logic_source
+                )
+                logic_hash = hashlib.sha256(
+                    json.dumps(
+                        logic_data, sort_keys=True, ensure_ascii=False
+                    ).encode("utf-8")
+                ).hexdigest()
+            cached = _fsm_cache.get(logic_hash)
+            if cached is not None:
+                self._fsm = cached
+            else:
+                self._fsm = FSMCompiler().compile(self._dsl)
+                _fsm_cache[logic_hash] = self._fsm
         except Exception as e:
             self._record_event("error", f"ComposableStrategy: FSM 编译失败 {e}")
             return
@@ -228,20 +279,22 @@ class ComposableStrategy(BaseStrategy):
         self._rule_map = {rule.name: rule for rule in self._dsl.rules}
 
         # 5. 实例化基础策略 Block（GridBlock 等只接收策略专属参数）
-        base_kind = self._dsl.base_strategy.kind
-        base_cls = base_strategy_registry.get(base_kind)
-        if base_cls is None:
-            self._record_event(
-                "error", f"ComposableStrategy: 未知基础策略 kind {base_kind}"
-            )
-            return
-        try:
-            self._base_block = base_cls(**self._dsl.base_strategy.params)
-        except Exception as e:
-            self._record_event(
-                "error", f"ComposableStrategy: 基础策略实例化失败 {e}"
-            )
-            return
+        #    无基础策略（纯规则策略，kind=None）时跳过实例化与生命周期调用
+        if self._dsl.base_strategy is not None and self._dsl.base_strategy.kind is not None:
+            base_kind = self._dsl.base_strategy.kind
+            base_cls = base_strategy_registry.get(base_kind)
+            if base_cls is None:
+                self._record_event(
+                    "error", f"ComposableStrategy: 未知基础策略 kind {base_kind}"
+                )
+                return
+            try:
+                self._base_block = base_cls(**self._dsl.base_strategy.params)
+            except Exception as e:
+                self._record_event(
+                    "error", f"ComposableStrategy: 基础策略实例化失败 {e}"
+                )
+                return
 
         # 6. 启动：标记运行、刷新最新价、构建初始 ctx、挂初始网格、绑定事件
         self._running = True
@@ -251,10 +304,11 @@ class ComposableStrategy(BaseStrategy):
         await self._refresh_price(symbol)
 
         ctx = self._build_context()
-        try:
-            await self._base_block.on_start(ctx)
-        except Exception as e:
-            self._record_event("error", f"ComposableStrategy: on_start 异常 {e}")
+        if self._base_block is not None:
+            try:
+                await self._base_block.on_start(ctx)
+            except Exception as e:
+                self._record_event("error", f"ComposableStrategy: on_start 异常 {e}")
 
         # 绑定事件（缓存实例 + 调用 bind 注册回调）
         self._bind_events(ctx)
@@ -264,62 +318,97 @@ class ComposableStrategy(BaseStrategy):
         # 7. FSM 主循环
         tick_interval = float(self.params.get("tick_interval", 3.0))
         current_state = self._fsm.initial_state  # "RUNNING"
+        self._current_state = current_state
 
         try:
             while self._running:
-                # 每个 tick 刷新最新价并构建新 ctx（清空指标缓存）
-                await self._refresh_price(symbol)
-                ctx = self._build_context()
+                try:
+                    # 每个 tick 刷新最新价并构建新 ctx（清空指标缓存）
+                    await self._refresh_price(symbol)
+                    ctx = self._build_context()
+                    self._latest_ctx = ctx
 
-                # RUNNING 状态下调用基础策略 on_tick
-                if current_state == "RUNNING":
-                    try:
-                        await self._base_block.on_tick(ctx)
-                    except Exception as e:
-                        self._handle_error(ctx, f"on_tick 异常: {e}")
+                    # 风控检查（daily_max_loss / stop_loss / take_profit）
+                    if not await self._check_risk_filters(ctx):
+                        break
 
-                # 检查当前状态的所有出边转换
-                for transition in self._fsm.transitions_from(current_state):
-                    # 冷却检查
-                    if self._is_in_cooldown(transition, ctx):
-                        continue
+                    # RUNNING 状态下调用基础策略 on_tick
+                    if current_state == "RUNNING":
+                        try:
+                            if self._base_block is not None:
+                                await self._base_block.on_tick(ctx)
+                        except Exception as e:
+                            # 网络错误上抛由主循环统一退避；其他异常容错记录
+                            if self._is_network_error(e):
+                                raise
+                            self._handle_error(ctx, f"on_tick 异常: {e}")
 
-                    # guard 评估
-                    try:
-                        guard_passed = await self._evaluate_guard(transition, ctx)
-                    except Exception as e:
-                        self._handle_error(ctx, f"guard 评估异常: {e}")
-                        continue
+                    # 检查当前状态的所有出边转换
+                    for transition in self._fsm.transitions_from(current_state):
+                        # 冷却检查
+                        if self._is_in_cooldown(transition, ctx):
+                            continue
 
-                    if not guard_passed:
-                        continue
+                        # guard 评估
+                        try:
+                            guard_passed = await self._evaluate_guard(transition, ctx)
+                        except Exception as e:
+                            if self._is_network_error(e):
+                                raise
+                            self._handle_error(ctx, f"guard 评估异常: {e}")
+                            continue
 
-                    # guard 通过：执行动作
-                    try:
-                        await self._execute_actions(transition.actions, ctx)
-                    except Exception as e:
-                        self._handle_error(ctx, f"action 执行异常: {e}")
+                        if not guard_passed:
+                            continue
 
-                    # 状态迁移
-                    old_state = current_state
-                    current_state = transition.to_state
+                        # guard 通过：执行动作
+                        try:
+                            await self._execute_actions(transition.actions, ctx)
+                        except Exception as e:
+                            if self._is_network_error(e):
+                                raise
+                            self._handle_error(ctx, f"action 执行异常: {e}")
 
-                    # 进入新状态副作用
-                    try:
-                        await self._enter_state(current_state, ctx)
-                    except Exception as e:
-                        self._handle_error(ctx, f"enter_state 异常: {e}")
+                        # 状态迁移
+                        old_state = current_state
+                        current_state = transition.to_state
 
-                    # 记录冷却
-                    self._last_triggered[transition.rule_name] = ctx.tick_ts
+                        # 进入新状态副作用
+                        try:
+                            await self._enter_state(current_state, ctx)
+                        except Exception as e:
+                            if self._is_network_error(e):
+                                raise
+                            self._handle_error(ctx, f"enter_state 异常: {e}")
 
-                    # 日志
-                    self._log_state_transition(
-                        old_state, current_state, transition, ctx
-                    )
+                        # 记录冷却
+                        self._last_triggered[transition.rule_name] = ctx.tick_ts
 
-                    # 每个 tick 只执行一个转换
-                    break
+                        # 日志
+                        self._log_state_transition(
+                            old_state, current_state, transition, ctx
+                        )
+
+                        # 每个 tick 只执行一个转换
+                        break
+
+                    # tick 成功完成：重置网络错误计数与退避
+                    self._consecutive_errors = 0
+                    self._backoff_delay = 1.0
+
+                except (httpx.HTTPError, OSError, ConnectionError) as e:
+                    if self._handle_network_error(e):
+                        break
+                    await asyncio.sleep(self._backoff_delay)
+                    continue
+                except Exception as e:
+                    # 按错误消息识别网络错误（WinError / timeout / connection 等）
+                    if not self._is_network_error(e):
+                        raise
+                    if self._handle_network_error(e):
+                        break
+                    await asyncio.sleep(self._backoff_delay)
+                    continue
 
                 await asyncio.sleep(tick_interval)
         finally:
@@ -338,7 +427,7 @@ class ComposableStrategy(BaseStrategy):
 
     def _get_symbol(self) -> str:
         """从已编译的 DSL 或原始 dsl_config 字典中提取主交易对。"""
-        if self._dsl is not None:
+        if self._dsl is not None and self._dsl.base_strategy is not None and self._dsl.base_strategy.kind is not None:
             return self._dsl.base_strategy.params.get("symbol", "")
         config = self.params.get("dsl_config") or {}
         base = config.get("base_strategy") or {}
@@ -370,15 +459,20 @@ class ComposableStrategy(BaseStrategy):
         )
 
     async def _refresh_price(self, symbol: str) -> None:
-        """刷新 ``self._last_price``（最新成交价）。失败保留旧值。"""
+        """刷新 ``self._last_price``（最新成交价）。
+
+        网络错误向上抛出，由主循环统一退避处理；非网络错误保留旧值。
+        """
         if not symbol:
             return
         try:
             data = await self.client.get_ticker(symbol)
             if data:
                 self._last_price = float(data[0]["last"])
-        except Exception:
-            pass
+        except Exception as e:
+            if self._is_network_error(e):
+                raise
+            # 非网络错误：保留旧值，继续
 
     # ============================================================
     # guard 评估
@@ -436,8 +530,12 @@ class ComposableStrategy(BaseStrategy):
     async def _execute_actions(
         self, actions: list[ActionRef], ctx: ExecutionContext
     ) -> None:
-        """依次执行动作列表。"""
+        """依次执行动作列表。place_order 动作在下单前会做风控检查。"""
         for action_ref in actions:
+            # 下单前风控检查（max_position_ratio / min_trade_size）
+            if action_ref.kind == "place_order":
+                if not await self._check_order_risk(ctx, action_ref):
+                    continue
             await execute_action(action_ref, ctx)
 
     # ============================================================
@@ -452,7 +550,17 @@ class ComposableStrategy(BaseStrategy):
         - 进入 PAUSED: 调用 ``base_block.on_pause(ctx)``
         - 进入 REBALANCING: 无特殊钩子
         - 进入 RUNNING: 调用 ``base_block.on_resume(ctx)``
+
+        自环转换（old_state == new_state，如无 recover_when 的规则产生的
+        RUNNING→RUNNING）仅执行 transition 上绑定的 actions（在调用方完成），
+        不触发生命周期钩子，避免每 tick 重复 on_resume → on_start 爆炸挂单。
         """
+        old_state = self._current_state
+        if old_state == state_name:
+            # 自环转换：不触发生命周期钩子
+            return
+        self._current_state = state_name
+
         state_type = self._resolve_state_type(state_name)
 
         if state_type == FSMStateType.PAUSED:
@@ -508,6 +616,9 @@ class ComposableStrategy(BaseStrategy):
         实例按 ``rule_name`` 缓存到 ``self._event_instances``，供
         ``_evaluate_guard`` 复用以保留 push 型事件的跨 tick 状态（队列 /
         上次触发时间）。
+
+        同时为基础策略 Block 注册 OrderManager "filled" 回调，把订单成交
+        事件转发给 ``base_block.on_order_filled``（接通反向挂单）。
         """
         if self._fsm is None:
             return
@@ -532,6 +643,21 @@ class ComposableStrategy(BaseStrategy):
                 self._record_event(
                     "warn", f"事件 bind 失败 kind={ref.kind}: {e}"
                 )
+
+        # 接通基础策略的 on_order_filled 回调（Task 5.1）
+        if self._base_block is not None and hasattr(self._base_block, "on_order_filled"):
+            self.order_manager.on("filled", self._on_order_filled_cb)
+
+    def _on_order_filled_cb(self, order):
+        """OrderManager filled 回调：转发给基础策略的 on_order_filled 钩子。
+
+        返回协程（由 OrderManager._trigger_callbacks 通过
+        asyncio.ensure_future 调度），使用最近一次 tick 的 ctx。
+        """
+        if self._base_block is None:
+            return
+        ctx = self._latest_ctx if self._latest_ctx is not None else self._build_context()
+        return self._base_block.on_order_filled(order, ctx)
 
     # ============================================================
     # 日志与异常
@@ -568,3 +694,234 @@ class ComposableStrategy(BaseStrategy):
         self._record_event("error", f"ComposableStrategy: {message}")
         ctx.kv_state["_strategy_error_flag"] = True
         ctx.kv_state["_strategy_error_msg"] = message
+
+    @staticmethod
+    def _is_network_error(exc: BaseException) -> bool:
+        """判断异常是否为网络错误。
+
+        先按异常类型匹配（``httpx.HTTPError`` / ``OSError`` /
+        ``ConnectionError``），再按错误消息关键词匹配（winerror /
+        timeout / connection），覆盖 OKX SDK 抛出的非 httpx 类型但
+        携带网络错误信息的异常（如 WinError 64 / 10054）。
+        """
+        if isinstance(exc, (httpx.HTTPError, OSError, ConnectionError)):
+            return True
+        msg = str(exc).lower()
+        return any(kw in msg for kw in ("winerror", "timeout", "connection"))
+
+    def _handle_network_error(self, exc: BaseException) -> bool:
+        """主循环网络错误退避处理（Task 5）。
+
+        递增 ``_consecutive_errors``，``_backoff_delay`` 指数倍增
+        （1s→2s→4s→8s→16s，上限 30s），记录事件。连续错误达到
+        ``_max_consecutive_errors`` 时调用 ``stop()``、标记实例
+        ``error`` 状态并记录 "连续网络错误超限，自动停止"。
+
+        Returns:
+            True 表示已达到阈值、主循环应 break；False 表示退避后继续。
+        """
+        self._consecutive_errors += 1
+        self._backoff_delay = min(self._backoff_delay * 2, 30.0)
+        self._record_event(
+            "error",
+            f"ComposableStrategy: 网络异常 (第{self._consecutive_errors}次)，"
+            f"退避 {self._backoff_delay}s: {str(exc)[:200]}",
+        )
+        if self._consecutive_errors >= self._max_consecutive_errors:
+            self._record_event("error", "连续网络错误超限，自动停止")
+            self.stop()
+            try:
+                self.update_status("error")
+            except Exception:
+                pass
+            return True
+        return False
+
+    # ============================================================
+    # 风控（Task 5）
+    # ============================================================
+
+    async def _check_risk_filters(self, ctx: ExecutionContext) -> bool:
+        """每 tick 风控检查（daily_max_loss / stop_loss / take_profit）。
+
+        返回 True 表示正常继续，False 表示已触发风控停止。
+        ``risk_filter`` 为 None 时跳过所有检查（SubTask 5.4）。
+        """
+        if self._risk_filter is None:
+            return True
+
+        rf = self._risk_filter
+
+        # 5.1 daily_max_loss: 累计当日已实现亏损达阈值
+        if rf.daily_max_loss is not None:
+            daily_pnl = self._get_daily_realized_pnl()
+            if daily_pnl < 0:
+                equity = await self._get_account_equity()
+                if equity > 0 and abs(daily_pnl) / equity >= rf.daily_max_loss:
+                    await self._trigger_risk_stop(ctx, "daily_max_loss", {
+                        "daily_realized_pnl": daily_pnl,
+                        "equity": equity,
+                        "threshold": rf.daily_max_loss,
+                    })
+                    return False
+
+        # 5.2 stop_loss / take_profit: 未实现盈亏率触发阈值
+        if rf.stop_loss is not None or rf.take_profit is not None:
+            upl_ratio = await self._get_unrealized_pnl_ratio(ctx)
+            if upl_ratio is not None:
+                if rf.stop_loss is not None and upl_ratio <= -abs(rf.stop_loss):
+                    await self._trigger_risk_stop(ctx, "stop_loss", {
+                        "upl_ratio": upl_ratio,
+                        "threshold": rf.stop_loss,
+                    })
+                    return False
+                if rf.take_profit is not None and upl_ratio >= abs(rf.take_profit):
+                    await self._trigger_risk_stop(ctx, "take_profit", {
+                        "upl_ratio": upl_ratio,
+                        "threshold": rf.take_profit,
+                    })
+                    return False
+
+        return True
+
+    async def _check_order_risk(
+        self, ctx: ExecutionContext, action_ref: ActionRef
+    ) -> bool:
+        """下单前风控检查（max_position_ratio / min_trade_size）。
+
+        返回 True 允许下单，False 拒绝。``risk_filter`` 为 None 时跳过。
+        """
+        if self._risk_filter is None:
+            return True
+
+        rf = self._risk_filter
+        qty = action_ref.args.get("qty")
+
+        # min_trade_size: 订单量不得小于最小交易量
+        if rf.min_trade_size is not None and isinstance(qty, (int, float)) \
+                and not isinstance(qty, bool):
+            if qty < rf.min_trade_size:
+                self._record_event(
+                    "risk_rejected",
+                    f"下单被风控拒绝: 订单量 {qty} 小于最小交易量 {rf.min_trade_size}",
+                    {"qty": qty, "min_trade_size": rf.min_trade_size,
+                     "symbol": ctx.symbol},
+                )
+                return False
+
+        # max_position_ratio: 下单后持仓占比不得超过上限
+        if rf.max_position_ratio is not None:
+            price = ctx.current_price
+            if price > 0 and isinstance(qty, (int, float)) \
+                    and not isinstance(qty, bool):
+                equity = await self._get_account_equity()
+                if equity > 0:
+                    current_pos_value = await self._get_position_value(ctx, price)
+                    new_pos_value = current_pos_value + abs(qty) * price
+                    ratio = new_pos_value / equity
+                    if ratio > rf.max_position_ratio:
+                        self._record_event(
+                            "risk_rejected",
+                            f"下单被风控拒绝: 持仓占比 {ratio:.4f} 超过上限 "
+                            f"{rf.max_position_ratio}",
+                            {"current_pos_value": current_pos_value,
+                             "order_value": abs(qty) * price,
+                             "equity": equity, "ratio": ratio,
+                             "max_position_ratio": rf.max_position_ratio},
+                        )
+                        return False
+
+        return True
+
+    async def _trigger_risk_stop(
+        self, ctx: ExecutionContext, reason: str, details: dict
+    ) -> None:
+        """触发风控：close_all（撤销所有订单）+ stop_strategy + log_event。"""
+        symbol = ctx.symbol
+        # close_all: 撤销所有挂单
+        try:
+            cancelled = await self.order_manager.cancel_all(symbol)
+            details["cancelled"] = cancelled
+        except Exception as e:
+            self._record_event("error", f"风控平仓异常: {e}")
+        # log_event
+        self._record_event(
+            "risk_triggered",
+            f"风控触发: {reason}，策略停止",
+            {"reason": reason, **details},
+        )
+        # stop_strategy
+        self._running = False
+
+    # ------------------------------------------------------------
+    # 风控辅助：账户 / 持仓信息查询
+    # ------------------------------------------------------------
+
+    async def _get_account_equity(self) -> float:
+        """获取账户总权益。失败返回 0。"""
+        try:
+            balance = await self.client.get_balance()
+            data = balance.get("data", []) if isinstance(balance, dict) else []
+            if data:
+                return float(data[0].get("totalEq", 0) or 0)
+        except Exception:
+            pass
+        return 0.0
+
+    async def _get_unrealized_pnl_ratio(
+        self, ctx: ExecutionContext
+    ) -> float | None:
+        """获取当前 symbol 的未实现盈亏率。无持仓返回 None。"""
+        symbol = ctx.symbol
+        if not symbol:
+            return None
+        try:
+            positions = await ctx.client.get_positions()
+            for pos in positions:
+                inst_id = (pos.get("instId") if isinstance(pos, dict)
+                           else getattr(pos, "instId", None))
+                if inst_id == symbol:
+                    ratio = (pos.get("uplRatio") if isinstance(pos, dict)
+                             else getattr(pos, "uplRatio", None))
+                    if ratio is not None:
+                        return float(ratio)
+                    # fallback: 用 upl / margin 计算
+                    upl = (pos.get("upl") if isinstance(pos, dict)
+                           else getattr(pos, "upl", None))
+                    margin = (pos.get("margin") if isinstance(pos, dict)
+                              else getattr(pos, "margin", None))
+                    if upl is not None and margin and float(margin) > 0:
+                        return float(upl) / float(margin)
+                    break
+        except Exception:
+            pass
+        return None
+
+    async def _get_position_value(
+        self, ctx: ExecutionContext, price: float
+    ) -> float:
+        """获取当前 symbol 的持仓价值（按给定价格估算）。"""
+        symbol = ctx.symbol
+        if not symbol:
+            return 0.0
+        try:
+            positions = await ctx.client.get_positions()
+            for pos in positions:
+                inst_id = (pos.get("instId") if isinstance(pos, dict)
+                           else getattr(pos, "instId", None))
+                if inst_id == symbol:
+                    pos_val = (pos.get("pos") if isinstance(pos, dict)
+                               else getattr(pos, "pos", "0"))
+                    return abs(float(pos_val or 0)) * price
+        except Exception:
+            pass
+        return 0.0
+
+    def _get_daily_realized_pnl(self) -> float:
+        """返回当日已实现盈亏（按 UTC 日期重置基线）。"""
+        from datetime import datetime, timezone
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if today != self._daily_reset_date:
+            self._daily_reset_date = today
+            self._daily_pnl_baseline = self._realized_pnl
+        return self._realized_pnl - self._daily_pnl_baseline

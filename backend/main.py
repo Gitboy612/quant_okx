@@ -97,3 +97,9 @@ def startup():
             print(f"[startup] Reset {len(orphaned)} orphaned strategy instances to stopped")
     finally:
         db.close()
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    """关闭时清理 StrategyEngine 按账户缓存的 OKXClient，释放 httpx 连接。"""
+    await strategy_engine.aclose()

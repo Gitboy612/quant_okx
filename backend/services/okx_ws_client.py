@@ -9,11 +9,16 @@ import time
 
 import websockets
 from websockets.asyncio.client import ClientConnection
+from websockets.protocol import State
 
 logger = logging.getLogger(__name__)
 
 WS_DEMO_URL = "wss://wspap.okx.com:8443/ws/v5/private"
 WS_LIVE_URL = "wss://ws.okx.com:8443/ws/v5/private"
+
+# Circuit breaker states for the WebSocket reconnect logic.
+CIRCUIT_CLOSED = "closed"
+CIRCUIT_OPEN = "open"
 
 
 def _ws_timestamp() -> int:
@@ -25,6 +30,18 @@ def _sign(timestamp: int, secret_key: str) -> str:
     message = str(timestamp) + "GET" + "/users/self/verify"
     mac = hmac.new(secret_key.encode(), message.encode(), hashlib.sha256)
     return base64.b64encode(mac.digest()).decode()
+
+
+def _get_proxy() -> str | None:
+    """Return the first available proxy URL from the environment, or None.
+
+    Checks ``HTTPS_PROXY``, ``ALL_PROXY``, ``HTTP_PROXY`` in that order.
+    """
+    for var in ("HTTPS_PROXY", "ALL_PROXY", "HTTP_PROXY"):
+        value = os.getenv(var)
+        if value:
+            return value
+    return None
 
 
 class OKXWsClient:
@@ -46,6 +63,12 @@ class OKXWsClient:
         self._subscriptions: list[dict] = []
         self._login_event = asyncio.Event()
 
+        # Circuit breaker state for the reconnect logic.
+        self._circuit_state = CIRCUIT_CLOSED
+        self._reconnect_count = 0
+        self._max_reconnect = 20
+        self._probe_task: asyncio.Task | None = None
+
     @property
     def is_connected(self) -> bool:
         return self._connected
@@ -57,6 +80,15 @@ class OKXWsClient:
         if self._disconnected_at is None:
             return False
         return (time.time() - self._disconnected_at) > 30.0
+
+    @property
+    def is_healthy(self) -> bool:
+        """True only when the circuit breaker is closed AND the underlying
+        WebSocket connection is alive (open).
+        """
+        if self._circuit_state != CIRCUIT_CLOSED:
+            return False
+        return self._ws is not None and self._ws.state == State.OPEN
 
     def on_order_update(self, callback: callable):
         """Register a callback for order updates.
@@ -73,7 +105,12 @@ class OKXWsClient:
     async def _connect_and_login(self):
         logger.info(f"Connecting to OKX WebSocket: {self._ws_url}")
         try:
-            self._ws = await websockets.connect(self._ws_url, ping_interval=None)
+            connect_kwargs = {"ping_interval": None}
+            proxy = _get_proxy()
+            if proxy:
+                connect_kwargs["proxy"] = proxy
+                logger.info(f"Using proxy for WebSocket connection: {proxy}")
+            self._ws = await websockets.connect(self._ws_url, **connect_kwargs)
             self._connected = True
             self._disconnected_at = None
             logger.info("WebSocket connected, sending login...")
@@ -97,8 +134,10 @@ class OKXWsClient:
             logger.error(f"Connection failed: {e}")
             self._connected = False
             self._disconnected_at = time.time()
-            if self._should_reconnect:
-                asyncio.create_task(self._reconnect())
+            # Reconnect is managed solely by the _reconnect() while loop (and
+            # _probe_reconnect() once the circuit is open). Spawning a new
+            # reconnect task here would cause duplicate coroutines to multiply
+            # exponentially on repeated failures.
 
     async def _login(self):
         timestamp = _ws_timestamp()
@@ -181,8 +220,47 @@ class OKXWsClient:
             await asyncio.sleep(delay)
             self._reconnect_delay *= 2
             await self._connect_and_login()
-        if self._connected:
-            self._reconnect_delay = 1.0
+            if self._connected:
+                # Successfully reconnected: reset failure counter and backoff.
+                self._reconnect_count = 0
+                self._reconnect_delay = 1.0
+                break
+            # Failed attempt - count toward the circuit breaker threshold.
+            self._reconnect_count += 1
+            if self._reconnect_count >= self._max_reconnect:
+                logger.error(
+                    f"Circuit breaker opened after {self._reconnect_count} "
+                    f"failed reconnect attempts; entering probe mode"
+                )
+                self._circuit_state = CIRCUIT_OPEN
+                self._probe_task = asyncio.create_task(self._probe_reconnect())
+                break
+
+    async def _probe_reconnect(self):
+        """Background probe used while the circuit is open.
+
+        Every 60 seconds, attempts a single reconnect. On success the circuit
+        is closed and counters reset; on failure the probe keeps looping.
+        Exits when ``_should_reconnect`` becomes False or the circuit was
+        already closed by another path.
+        """
+        logger.info("Circuit open: starting 60s reconnect probe")
+        while self._should_reconnect and self._circuit_state == CIRCUIT_OPEN:
+            await asyncio.sleep(60)
+            if not self._should_reconnect or self._circuit_state != CIRCUIT_OPEN:
+                break
+            logger.info("Probe: attempting reconnect...")
+            try:
+                await self._connect_and_login()
+            except Exception as e:
+                logger.error(f"Probe reconnect attempt failed: {e}")
+            if self._connected:
+                self._circuit_state = CIRCUIT_CLOSED
+                self._reconnect_count = 0
+                self._reconnect_delay = 1.0
+                logger.info("Probe reconnect succeeded - circuit closed")
+                return
+            logger.info("Probe reconnect failed, will retry in 60s")
 
     async def _message_loop(self):
         """Internal: read messages from WebSocket."""

@@ -1,4 +1,7 @@
 import asyncio
+import hashlib
+import json
+import logging
 from datetime import datetime, timezone
 from database import SessionLocal
 from services.okx_client import OKXClient
@@ -9,11 +12,35 @@ from strategies.trend_strategy import TrendStrategy
 from strategies.arbitrage_strategy import ArbitrageStrategy
 from strategies.advanced_grid_hedge_strategy import AdvancedGridHedgeStrategy
 from dsl.executor import ComposableStrategy
+from fastapi import HTTPException
+
+logger = logging.getLogger(__name__)
+
+
+def _compute_logic_hash_from_params(params: dict | None) -> str | None:
+    """计算 params 中 logic 段的 SHA-256 哈希。
+
+    优先取 qs_model_config.logic，回退到 dsl_config（向后兼容）。
+    使用 sort_keys=True 规范化 JSON，确保相同内容产生相同哈希。
+    与 routers/strategies.py 中 _compute_logic_hash 逻辑保持一致。
+    """
+    if not params:
+        return None
+    qs = params.get("qs_model_config")
+    if qs:
+        logic_source = qs.get("logic", {}) or {}
+    else:
+        logic_source = params.get("dsl_config")
+    if logic_source is None:
+        return None
+    canonical_json = json.dumps(logic_source, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
 
 
 class StrategyEngine:
     _instance = None
     _tasks: dict[int, tuple[asyncio.Task, object]] = {}
+    _account_clients: dict[str, OKXClient] = {}
     _strategy_map = {
         "grid": GridStrategy,
         "trend": TrendStrategy,
@@ -26,6 +53,37 @@ class StrategyEngine:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
+
+    def _get_client_for_account(self, account: "Account", strategy_instance_id: int | None = None) -> OKXClient:
+        """按账户复用 OKXClient，避免每个实例/每次调用都新建连接导致句柄泄漏。
+
+        同一账户（account.id）共享同一个 OKXClient；首次调用时按现有 start_strategy
+        的参数构造并缓存。该方法为同步方法（OKXClient.__init__ 内部同步建连），
+        asyncio 单线程下整段执行无 await，天然对并发启动安全。
+        """
+        key = str(account.id)
+        client = self._account_clients.get(key)
+        if client is None:
+            client = OKXClient(
+                api_key_encrypted=account.api_key_encrypted,
+                secret_encrypted=account.secret_key_encrypted,
+                passphrase_encrypted=account.passphrase_encrypted,
+                trade_mode=account.trade_mode,
+                strategy_instance_id=strategy_instance_id,
+                account_name=account.name,
+            )
+            self._account_clients[key] = client
+        return client
+
+    async def aclose(self):
+        """引擎关闭时清理所有按账户缓存的 OKXClient，释放 httpx 连接。"""
+        clients = list(self._account_clients.values())
+        self._account_clients.clear()
+        for client in clients:
+            try:
+                await client.aclose()
+            except Exception:
+                pass
 
     async def check_feasibility(self, instance_id: int) -> dict:
         db = SessionLocal()
@@ -47,57 +105,60 @@ class StrategyEngine:
                 account_name=account.name,
             )
 
-            params = instance.params
-            symbol = params.get("symbol", "")
-            strategy_type = template.strategy_type
+            try:
+                params = instance.params
+                symbol = params.get("symbol", "")
+                strategy_type = template.strategy_type
 
-            tickers = await client.get_ticker(symbol)
-            if not tickers:
-                return {"ok": False, "reason": f"无法获取 {symbol} 行情数据，请检查交易对是否存在"}
+                tickers = await client.get_ticker(symbol)
+                if not tickers:
+                    return {"ok": False, "reason": f"无法获取 {symbol} 行情数据，请检查交易对是否存在"}
 
-            current_price = float(tickers[0]["last"])
+                current_price = float(tickers[0]["last"])
 
-            if strategy_type == "grid":
-                upper = params.get("upper_price", 0)
-                lower = params.get("lower_price", 0)
-                grid_count = params.get("grid_count", 0)
-                order_qty = params.get("order_qty", 0)
-                if upper <= lower or grid_count < 2 or order_qty <= 0:
-                    return {"ok": False, "reason": "参数无效（上限>下限，网格数≥2，交易量>0）"}
-                step = (upper - lower) / (grid_count - 1)
-                grids_below = sum(1 for i in range(grid_count) if (lower + i * step) <= current_price)
-                required_min = round(order_qty * grids_below * lower, 2)
-                balance_resp = await client.get_balance()
-                available_usdt = self._extract_available(balance_resp, "USDT")
-                return {
-                    "ok": available_usdt >= required_min * 0.3,
-                    "current_price": current_price,
-                    "upper_price": upper,
-                    "lower_price": lower,
-                    "grid_count": grid_count,
-                    "grids_below_price": grids_below,
-                    "required_usdt_min": required_min,
-                    "available_usdt": available_usdt,
-                    "reason": f"当前价{current_price}在[{lower}-{upper}]中，下方{grids_below}格需≈${required_min} USDT（买币+挂卖单），可用${available_usdt} USDT",
-                }
-
-            elif strategy_type in ("trend", "advanced_grid_hedge"):
-                order_qty = params.get("order_qty", 0)
-                if order_qty <= 0:
-                    return {"ok": False, "reason": "交易量必须大于0"}
-                if "-SWAP" in symbol:
+                if strategy_type == "grid":
+                    upper = params.get("upper_price", 0)
+                    lower = params.get("lower_price", 0)
+                    grid_count = params.get("grid_count", 0)
+                    order_qty = params.get("order_qty", 0)
+                    if upper <= lower or grid_count < 2 or order_qty <= 0:
+                        return {"ok": False, "reason": "参数无效（上限>下限，网格数≥2，交易量>0）"}
+                    step = (upper - lower) / (grid_count - 1)
+                    grids_below = sum(1 for i in range(grid_count) if (lower + i * step) <= current_price)
+                    required_min = round(order_qty * grids_below * lower, 2)
                     balance_resp = await client.get_balance()
                     available_usdt = self._extract_available(balance_resp, "USDT")
-                    required = round(order_qty * current_price, 2)
-                    return {"ok": available_usdt >= required * 0.2, "current_price": current_price,
-                            "required_approx": required, "available_usdt": available_usdt,
-                            "reason": f"约需${required}保证金，可用${available_usdt} USDT"}
-                return {"ok": True, "current_price": current_price, "reason": "现货模式"}
+                    return {
+                        "ok": available_usdt >= required_min * 0.3,
+                        "current_price": current_price,
+                        "upper_price": upper,
+                        "lower_price": lower,
+                        "grid_count": grid_count,
+                        "grids_below_price": grids_below,
+                        "required_usdt_min": required_min,
+                        "available_usdt": available_usdt,
+                        "reason": f"当前价{current_price}在[{lower}-{upper}]中，下方{grids_below}格需≈${required_min} USDT（买币+挂卖单），可用${available_usdt} USDT",
+                    }
 
-            elif strategy_type == "arbitrage":
-                return {"ok": True, "reason": "套利策略无需预检查"}
+                elif strategy_type in ("trend", "advanced_grid_hedge"):
+                    order_qty = params.get("order_qty", 0)
+                    if order_qty <= 0:
+                        return {"ok": False, "reason": "交易量必须大于0"}
+                    if "-SWAP" in symbol:
+                        balance_resp = await client.get_balance()
+                        available_usdt = self._extract_available(balance_resp, "USDT")
+                        required = round(order_qty * current_price, 2)
+                        return {"ok": available_usdt >= required * 0.2, "current_price": current_price,
+                                "required_approx": required, "available_usdt": available_usdt,
+                                "reason": f"约需${required}保证金，可用${available_usdt} USDT"}
+                    return {"ok": True, "current_price": current_price, "reason": "现货模式"}
 
-            return {"ok": True, "reason": "检查通过"}
+                elif strategy_type == "arbitrage":
+                    return {"ok": True, "reason": "套利策略无需预检查"}
+
+                return {"ok": True, "reason": "检查通过"}
+            finally:
+                await client.aclose()
         except Exception as e:
             return {"ok": False, "reason": f"检查异常: {str(e)}"}
         finally:
@@ -130,14 +191,7 @@ class StrategyEngine:
 
             from services.encryption_service import decrypt
 
-            client = OKXClient(
-                api_key_encrypted=account.api_key_encrypted,
-                secret_encrypted=account.secret_key_encrypted,
-                passphrase_encrypted=account.passphrase_encrypted,
-                trade_mode=account.trade_mode,
-                strategy_instance_id=instance.id,
-                account_name=account.name,
-            )
+            client = self._get_client_for_account(account, strategy_instance_id=instance.id)
 
             # Create OrderManager
             from services.order_manager import OrderManager
@@ -157,6 +211,9 @@ class StrategyEngine:
             params = dict(instance.params)
             if "dsl_config" not in params and getattr(template, "dsl_config", None) is not None:
                 params["dsl_config"] = template.dsl_config
+            # 注入实例 logic_hash 供 ComposableStrategy 的 FSM 编译缓存复用
+            if getattr(instance, "logic_hash", None) and "logic_hash" not in params:
+                params["logic_hash"] = instance.logic_hash
 
             strategy = strategy_cls(
                 instance_id=instance.id,
@@ -167,7 +224,15 @@ class StrategyEngine:
                 order_manager=order_manager,
                 ws_client=ws_client,
             )
-            await strategy.start()
+            try:
+                await strategy.start()
+            except Exception as e:
+                # 启动失败（网络错误、WebSocket 连接失败等）：标记实例为 error，
+                # 记录日志并以 HTTPException 返回错误，避免 FastAPI 进程崩溃。
+                logger.error(f"Strategy start failed: {e}", exc_info=True)
+                instance.status = "error"
+                db.commit()
+                raise HTTPException(status_code=500, detail=f"策略启动失败: {e}")
 
             instance.status = "running"
             instance.started_at = datetime.now(timezone.utc)
@@ -228,18 +293,46 @@ class StrategyEngine:
             db.close()
 
     async def update_params(self, instance_id: int, params: dict):
-        entry = self._tasks.get(instance_id)
-        if entry:
-            entry[1].params = params
+        """更新实例参数，检测 logic 段变化并按状态决定是否允许。
+
+        - 计算「旧 params」与「新 params」的 logic 段 SHA-256（qs_model_config.logic
+          优先，回退 dsl_config），对比是否变化。
+        - 若 logic 变化且实例 status == "running"：拒绝并抛 HTTPException(400)，
+          避免运行中改 logic 导致 FSM 与配置不一致。
+        - 若 logic 变化且实例非 running（stopped/paused）：允许更新，并重新计算
+          instance.logic_hash 字段。
+        - 若 logic 未变化（仅改 params/meta/risk_filter 等）：自由更新，logic_hash 保持。
+        - 运行中实例同步更新内存中策略对象的 params。
+        """
+        old_params = None
         db = SessionLocal()
         try:
             instance = db.query(StrategyInstance).filter(StrategyInstance.id == instance_id).first()
-            if instance:
-                instance.params = params
-                instance.updated_at = datetime.now(timezone.utc)
-                db.commit()
+            if not instance:
+                return
+            old_params = instance.params
+            old_logic_hash = _compute_logic_hash_from_params(old_params)
+            new_logic_hash = _compute_logic_hash_from_params(params)
+            logic_changed = old_logic_hash != new_logic_hash
+
+            if logic_changed and instance.status == "running":
+                raise HTTPException(
+                    status_code=400,
+                    detail="运行中不能修改 logic 结构，请停止后更新",
+                )
+
+            instance.params = params
+            instance.updated_at = datetime.now(timezone.utc)
+            if logic_changed:
+                instance.logic_hash = new_logic_hash
+            db.commit()
         finally:
             db.close()
+
+        # 运行中实例：同步更新内存中策略对象的 params（逻辑未变，热更新参数）
+        entry = self._tasks.get(instance_id)
+        if entry:
+            entry[1].params = params
 
     def get_strategy_status(self, instance_id: int) -> str | None:
         db = SessionLocal()

@@ -7,7 +7,7 @@ echo.
 cd /d "%~dp0"
 
 echo [1/2] Starting backend server...
-start "QuantOKX-Backend" cmd /k "cd /d "%~dp0backend" && python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000"
+start "QuantOKX-Backend" cmd /k "cd /d "%~dp0backend" && python launcher.py"
 
 echo [2/2] Starting frontend dev server...
 cd /d "%~dp0frontend"

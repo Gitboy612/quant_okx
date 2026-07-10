@@ -1,4 +1,5 @@
-import { useEffect, useState, useMemo, useRef, type ReactNode } from 'react'
+import { useEffect, useState, useMemo, useRef, useCallback, type ReactNode, type CSSProperties, type Dispatch, type SetStateAction } from 'react'
+import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Plus, Trash2, ChevronDown, CheckCircle, XCircle, Play, Loader2,
@@ -8,7 +9,8 @@ import Modal from './Modal'
 import Dropdown from './Dropdown'
 import SymbolPicker from './SymbolPicker'
 import { getBlocks, validateDsl, dryRunDsl } from '../api/dsl'
-import { createTemplate } from '../api/strategies'
+import { createTemplate, updateTemplate } from '../api/strategies'
+import type { StrategyTemplate } from '../types'
 import type {
   BlockCatalog, BlockMeta, BlockRef, Trigger, Rule, DslConfig,
   ValidationResult, DryRunResult, QSModelConfig, QSModelMeta,
@@ -25,7 +27,7 @@ import type {
 // ============================================================
 
 interface NormalizedParam {
-  type: 'string' | 'number' | 'bool' | 'select' | 'object' | 'array'
+  type: 'string' | 'number' | 'int' | 'bool' | 'select' | 'object' | 'array'
   required: boolean
   default?: unknown
   min?: number
@@ -43,7 +45,8 @@ function normalizeParamDef(def: Record<string, unknown>, required: boolean): Nor
   let type: NormalizedParam['type']
   switch (rawType) {
     case 'string': case 'str': type = 'string'; break
-    case 'number': case 'integer': case 'int': case 'float': case 'double': type = 'number'; break
+    case 'integer': case 'int': type = 'int'; break
+    case 'number': case 'float': case 'double': type = 'number'; break
     case 'bool': case 'boolean': type = 'bool'; break
     case 'select': type = 'select'; break
     case 'object': type = 'object'; break
@@ -130,6 +133,51 @@ const SIMPLE_CONDITIONS: { value: string; label: string }[] = [
 ]
 const SIMPLE_KIND_SET = new Set(SIMPLE_CONDITIONS.map((c) => c.value))
 
+// ============================================================
+// 引用变量上下文与标签自动同步（Task 12 / 13）
+// ============================================================
+
+/** RefPicker 选中时携带的上下文，用于自动生成被引用参数的 label。 */
+export interface RefPickContext {
+  /** 触发引用的字段所属参数的原始 label（如基础策略参数"价格上限"）。 */
+  sourceLabel?: string
+  /** 规则索引（0-based），用于规则条件阈值/动作参数的标签生成。 */
+  ruleIndex?: number
+  /** 字段类型：'threshold' | 'param' 等。 */
+  fieldType?: string
+  /** 字段名（被引用处的参数 key）。 */
+  paramKey?: string
+}
+
+/** setParams 状态更新函数类型（与顶层 useState setter 一致）。 */
+type SetParamsFn = Dispatch<SetStateAction<Record<string, ParamDefinition>>>
+
+/**
+ * 引用选中后自动同步对应 $params.xxx 的 label（受 label_source 保护）。
+ *
+ * - 仅处理 `$params.xxx` 引用（$meta.base_symbol 不同步标签）。
+ * - wasReference 表示该字段在变更前是否已是引用：
+ *   - false（首次绑定）：总是同步标签并设 label_source='auto'。
+ *   - true（引用变更）：仅当当前 label_source==='auto' 时覆盖，'custom' 时跳过（Task 13.5）。
+ */
+function syncParamLabel(
+  setParams: SetParamsFn,
+  ref: string,
+  newLabel: string,
+  wasReference: boolean,
+) {
+  if (!ref.startsWith('$params.')) return
+  const key = ref.slice('$params.'.length)
+  if (!key) return
+  setParams((prev) => {
+    const cur = prev[key]
+    if (!cur) return prev
+    // 引用变更时，仅覆盖 label_source==='auto' 的标签（用户自定义不被覆盖）
+    if (wasReference && cur.label_source === 'custom') return prev
+    return { ...prev, [key]: { ...cur, label: newLabel, label_source: 'auto' } }
+  })
+}
+
 /** 安全的模板字符串替换（兼容低 target）。 */
 function fillTemplate(tpl: string, vars: Record<string, string>): string {
   let result = tpl
@@ -167,6 +215,61 @@ function renderConditionSummary(condition: BlockRef, catalog: BlockCatalog): str
 }
 
 // ============================================================
+// NumberInput — 草稿字符串数字输入（保留输入中间态，如 "0." 不被吞）
+// ============================================================
+
+function NumberInput({ value, onChange, step, min, max, placeholder, className }: {
+  value: number | undefined | null
+  onChange: (val: number | undefined) => void
+  step?: string | number
+  min?: number
+  max?: number
+  placeholder?: string
+  className?: string
+}) {
+  const [draft, setDraft] = useState<string>(value != null ? String(value) : '')
+  const lastValid = useRef<number | undefined>(value ?? undefined)
+
+  // Sync external value changes (e.g., when loading a template)
+  useEffect(() => {
+    if (value != null && String(value) !== draft) {
+      setDraft(String(value))
+      lastValid.current = value
+    }
+  }, [value])
+
+  const handleBlur = () => {
+    const num = Number(draft)
+    if (draft === '' || isNaN(num)) {
+      // Revert to last valid value
+      setDraft(lastValid.current != null ? String(lastValid.current) : '')
+      onChange(lastValid.current)
+    } else {
+      let clamped = num
+      if (min != null) clamped = Math.max(min, clamped)
+      if (max != null) clamped = Math.min(max, clamped)
+      setDraft(String(clamped))
+      lastValid.current = clamped
+      onChange(clamped)
+    }
+  }
+
+  return (
+    <input
+      type="number"
+      value={draft}
+      step={step}
+      min={min}
+      max={max}
+      placeholder={placeholder}
+      className={className}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={handleBlur}
+    />
+  )
+}
+
+// ============================================================
 // BlockPicker — 积木选择下拉（按 category 分组，中文化 label）
 // ============================================================
 
@@ -175,19 +278,57 @@ interface BlockPickerProps {
   value: string | null
   onChange: (kind: string | null) => void
   placeholder?: string
+  minPanelWidth?: number
 }
 
-function BlockPicker({ blocks, value, onChange, placeholder = '选择积木' }: BlockPickerProps) {
+function BlockPicker({ blocks, value, onChange, placeholder = '选择积木', minPanelWidth = 220 }: BlockPickerProps) {
   const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+  const [panelStyle, setPanelStyle] = useState<CSSProperties>({})
 
+  const computePanelStyle = useCallback(() => {
+    if (!containerRef.current) return
+    const rect = containerRef.current.getBoundingClientRect()
+    setPanelStyle({
+      position: 'fixed',
+      left: rect.left,
+      top: rect.bottom + 4,
+      minWidth: Math.max(rect.width, minPanelWidth),
+      zIndex: 9999,
+    })
+  }, [minPanelWidth])
+
+  const handleToggle = () => {
+    if (!open) computePanelStyle()
+    setOpen(!open)
+  }
+
+  // 监听 scroll / resize，使面板跟随触发器位置（Portal 渲染需手动同步）
+  useEffect(() => {
+    if (!open) return
+    computePanelStyle()
+    const handle = () => computePanelStyle()
+    window.addEventListener('scroll', handle, true)
+    window.addEventListener('resize', handle)
+    return () => {
+      window.removeEventListener('scroll', handle, true)
+      window.removeEventListener('resize', handle)
+    }
+  }, [open, computePanelStyle])
+
+  // 点击外部关闭（兼容 Portal：面板挂在 body 上，需同时判断 panelRef）
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+      if (!open) return
+      const target = e.target as Node
+      if (containerRef.current && containerRef.current.contains(target)) return
+      if (panelRef.current && panelRef.current.contains(target)) return
+      setOpen(false)
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
-  }, [])
+  }, [open])
 
   const grouped = useMemo(() => {
     const map = new Map<string, BlockMeta[]>()
@@ -201,10 +342,10 @@ function BlockPicker({ blocks, value, onChange, placeholder = '选择积木' }: 
   const selected = blocks.find((b) => b.kind === value)
 
   return (
-    <div ref={ref} className="relative">
+    <div ref={containerRef} className="relative">
       <button
         type="button"
-        onClick={() => setOpen(!open)}
+        onClick={handleToggle}
         className="flex items-center gap-2 bg-[#0C0C14] border border-[#1E1E28] rounded-md px-3 py-2 text-sm text-[#E8E8ED] hover:border-[#00D4AA]/30 transition-all w-full justify-between focus:outline-none focus:border-[#00D4AA]"
       >
         <span className={selected ? 'text-[#E8E8ED]' : 'text-[#6B6B7B]'}>
@@ -212,35 +353,41 @@ function BlockPicker({ blocks, value, onChange, placeholder = '选择积木' }: 
         </span>
         <ChevronDown className={`w-3.5 h-3.5 text-[#6B6B7B] transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
-      {open && (
-        <div className="absolute z-50 mt-1 w-full bg-[#14141A] border border-[#1E1E28] rounded-md shadow-[0_0_30px_rgba(0,0,0,0.5)] max-h-60 overflow-y-auto py-1">
-          {grouped.map(([category, items]) => (
-            <div key={category}>
-              <div className="text-[10px] text-[#6B6B7B] px-3 py-1 uppercase tracking-wide border-b border-[#1E1E28]/50">{category}</div>
-              {items.map((b) => (
-                <button
-                  key={b.kind}
-                  type="button"
-                  onClick={() => { onChange(b.kind); setOpen(false) }}
-                  className={`w-full text-left px-3 py-1.5 text-sm transition-all ${
-                    b.kind === value
-                      ? 'bg-[#00D4AA]/10 text-[#00D4AA]'
-                      : 'text-[#E8E8ED] hover:bg-[#1A1A24]'
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span>{blockLabel(b)}</span>
-                    {b.label && b.label !== b.kind && (
-                      <span className="text-[10px] text-[#6B6B7B] font-mono">{b.kind}</span>
-                    )}
-                  </div>
-                  {b.description && <div className="text-xs text-[#6B6B7B] mt-0.5">{b.description}</div>}
-                </button>
-              ))}
-            </div>
-          ))}
-        </div>
-      )}
+      {open &&
+        createPortal(
+          <div
+            ref={panelRef}
+            style={panelStyle}
+            className="bg-[#14141A] border border-[#1E1E28] rounded-md shadow-[0_0_30px_rgba(0,0,0,0.5)] max-h-60 overflow-y-auto py-1"
+          >
+            {grouped.map(([category, items]) => (
+              <div key={category}>
+                <div className="text-[10px] text-[#6B6B7B] px-3 py-1 uppercase tracking-wide border-b border-[#1E1E28]/50">{category}</div>
+                {items.map((b) => (
+                  <button
+                    key={b.kind}
+                    type="button"
+                    onClick={() => { onChange(b.kind); setOpen(false) }}
+                    className={`w-full text-left px-3 py-1.5 text-sm transition-all ${
+                      b.kind === value
+                        ? 'bg-[#00D4AA]/10 text-[#00D4AA]'
+                        : 'text-[#E8E8ED] hover:bg-[#1A1A24]'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span>{blockLabel(b)}</span>
+                      {b.label && b.label !== b.kind && (
+                        <span className="text-[10px] text-[#6B6B7B] font-mono">{b.kind}</span>
+                      )}
+                    </div>
+                    {b.description && <div className="text-xs text-[#6B6B7B] mt-0.5">{b.description}</div>}
+                  </button>
+                ))}
+              </div>
+            ))}
+          </div>,
+          document.body,
+        )}
     </div>
   )
 }
@@ -252,11 +399,13 @@ function BlockPicker({ blocks, value, onChange, placeholder = '选择积木' }: 
 interface RefPickerProps {
   references: string[]
   current: unknown
-  onPick: (ref: string) => void
+  onPick: (ref: string, context?: RefPickContext) => void
+  /** 选中时回传给 onPick 的上下文（sourceLabel / ruleIndex / fieldType / paramKey）。 */
+  context?: RefPickContext
 }
 
 /** 在参数输入旁渲染“引用”下拉，可选择已定义的 params 或 meta.base_symbol。 */
-function RefPicker({ references, current, onPick }: RefPickerProps) {
+function RefPicker({ references, current, onPick, context }: RefPickerProps) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const isRef = typeof current === 'string' && current.startsWith('$')
@@ -294,7 +443,7 @@ function RefPicker({ references, current, onPick }: RefPickerProps) {
             <button
               key={o.value}
               type="button"
-              onClick={() => { onPick(o.value); setOpen(false) }}
+              onClick={() => { onPick(o.value, context); setOpen(false) }}
               className={`w-full text-left px-3 py-1.5 text-xs font-mono transition-colors ${
                 o.value === current ? 'bg-[#00D4AA]/10 text-[#00D4AA]' : 'text-[#E8E8ED] hover:bg-[#1A1A24]'
               }`}
@@ -312,6 +461,17 @@ function RefPicker({ references, current, onPick }: RefPickerProps) {
 // BlockArgsForm — 积木参数动态表单（按类型渲染，symbol 继承）
 // ============================================================
 
+/** BlockArgsForm 引用选中时回传的信息，供上层生成参数标签并同步 setParams。 */
+interface BlockRefPickInfo {
+  ref: string
+  /** 触发引用的字段所属参数的原始 label（如"价格上限"）。 */
+  sourceLabel: string
+  /** 字段名（被引用处的参数 key）。 */
+  paramKey: string
+  /** 该字段在变更前是否已是引用（true=引用变更，受 label_source 保护）。 */
+  wasReference: boolean
+}
+
 interface BlockArgsFormProps {
   block: BlockMeta | null
   args: Record<string, unknown>
@@ -320,9 +480,11 @@ interface BlockArgsFormProps {
   inheritSymbol?: string
   /** 引用变量候选（基础策略参数引用 $params.xxx / $meta.base_symbol）。 */
   references?: string[]
+  /** 引用选中回调：用于自动同步被引用参数的 label。 */
+  onRefPick?: (info: BlockRefPickInfo) => void
 }
 
-function BlockArgsForm({ block, args, onChange, inheritSymbol, references }: BlockArgsFormProps) {
+function BlockArgsForm({ block, args, onChange, inheritSymbol, references, onRefPick }: BlockArgsFormProps) {
   const schema = useMemo(() => {
     if (!block) return {}
     return normalizeParamSchema(block.param_schema)
@@ -394,6 +556,7 @@ function BlockArgsForm({ block, args, onChange, inheritSymbol, references }: Blo
                   value={val !== undefined && val !== null ? String(val) : ''}
                   onChange={(v) => onChange({ ...args, [name]: v })}
                   placeholder="请选择"
+                  minPanelWidth={180}
                 />
               </div>
             ) : name === 'symbol' ? (
@@ -404,25 +567,31 @@ function BlockArgsForm({ block, args, onChange, inheritSymbol, references }: Blo
                   onChange={(v) => onChange({ ...args, [name]: v })}
                 />
               </div>
-            ) : param.type === 'number' ? (
+            ) : param.type === 'number' || param.type === 'int' ? (
               <div className="mt-0.5 flex items-center gap-1">
-                <input
-                  type="number"
-                  step={param.step ?? 'any'}
+                <NumberInput
+                  value={typeof val === 'number' ? val : undefined}
+                  onChange={(v) => {
+                    if (v === undefined) { onChange({ ...args, [name]: '' }); return }
+                    // int 类型：拒绝小数，截断为整数
+                    const finalVal = param.type === 'int' ? Math.trunc(v) : v
+                    onChange({ ...args, [name]: finalVal })
+                  }}
+                  step={param.type === 'int' ? (param.step ?? 1) : (param.step ?? 'any')}
                   min={param.min}
                   max={param.max}
-                  value={val !== undefined && val !== null ? String(val) : ''}
-                  onChange={(e) => {
-                    const raw = e.target.value
-                    onChange({ ...args, [name]: raw === '' ? '' : Number(raw) })
-                  }}
                   className="flex-1 min-w-0 bg-[#0C0C14] border border-[#1E1E28] rounded-md px-2 py-1.5 text-sm text-[#E8E8ED] focus:outline-none focus:border-[#00D4AA] font-mono"
                 />
                 {references && references.length > 0 && (
                   <RefPicker
                     references={references}
                     current={val}
-                    onPick={(r) => onChange({ ...args, [name]: r })}
+                    context={{ sourceLabel: label, paramKey: name, fieldType: 'param' }}
+                    onPick={(r) => {
+                      const wasRef = typeof val === 'string' && val.startsWith('$')
+                      onChange({ ...args, [name]: r })
+                      onRefPick?.({ ref: r, sourceLabel: label, paramKey: name, wasReference: wasRef })
+                    }}
                   />
                 )}
               </div>
@@ -439,12 +608,17 @@ function BlockArgsForm({ block, args, onChange, inheritSymbol, references }: Blo
                   <RefPicker
                     references={references}
                     current={val}
-                    onPick={(r) => onChange({ ...args, [name]: r })}
+                    context={{ sourceLabel: label, paramKey: name, fieldType: 'param' }}
+                    onPick={(r) => {
+                      const wasRef = typeof val === 'string' && val.startsWith('$')
+                      onChange({ ...args, [name]: r })
+                      onRefPick?.({ ref: r, sourceLabel: label, paramKey: name, wasReference: wasRef })
+                    }}
                   />
                 )}
               </div>
             )}
-            {param.min !== undefined && param.max !== undefined && param.type === 'number' && (
+            {param.min !== undefined && param.max !== undefined && (param.type === 'number' || param.type === 'int') && (
               <div className="text-[10px] text-[#6B6B7B] mt-0.5">范围：{param.min} ~ {param.max}{showUnit ? ` ${param.unit}` : ''}</div>
             )}
           </div>
@@ -463,9 +637,13 @@ interface IndicatorRefEditorProps {
   onChange: (ref: BlockRef | null) => void
   catalog: BlockCatalog
   baseSymbol?: string
+  /** 引用变量候选，下钻到指标参数表单。 */
+  references?: string[]
+  /** 引用选中回调，下钻到 BlockArgsForm。 */
+  onRefPick?: (info: BlockRefPickInfo) => void
 }
 
-function IndicatorRefEditor({ indicatorRef, onChange, catalog, baseSymbol }: IndicatorRefEditorProps) {
+function IndicatorRefEditor({ indicatorRef, onChange, catalog, baseSymbol, references, onRefPick }: IndicatorRefEditorProps) {
   const selectedIndicator = catalog.indicators.find((b) => b.kind === indicatorRef?.kind) ?? null
 
   return (
@@ -489,6 +667,8 @@ function IndicatorRefEditor({ indicatorRef, onChange, catalog, baseSymbol }: Ind
             args={indicatorRef.args}
             onChange={(newArgs) => onChange({ ...indicatorRef, args: newArgs })}
             inheritSymbol={baseSymbol}
+            references={references}
+            onRefPick={onRefPick}
           />
         )}
       </div>
@@ -506,11 +686,25 @@ interface SimpleConditionEditorProps {
   onChange: (condition: BlockRef) => void
   catalog: BlockCatalog
   baseSymbol?: string
+  /** 引用变量候选，下钻到阈值与指标参数。 */
+  references?: string[]
+  /** 顶层 setParams，用于引用选中后回写参数 label。 */
+  setParams?: SetParamsFn
+  /** 规则索引（0-based），用于生成"规则N..."标签。 */
+  ruleIndex?: number
 }
 
-function SimpleConditionEditor({ condition, onChange, catalog, baseSymbol }: SimpleConditionEditorProps) {
+function SimpleConditionEditor({ condition, onChange, catalog, baseSymbol, references, setParams, ruleIndex }: SimpleConditionEditorProps) {
   const indRef = (condition.args.indicator as BlockRef | undefined) ?? null
   const threshold = condition.args.threshold
+  const isThresholdRef = typeof threshold === 'string' && threshold.startsWith('$')
+
+  // 指标 label（用于阈值引用标签生成：规则{N}{indicatorLabel}触发阈值）
+  const indicatorLabel = useMemo(() => {
+    if (!indRef?.kind) return '指标'
+    const blk = catalog.indicators.find((b) => b.kind === indRef.kind)
+    return blk ? blockLabel(blk) : (indRef.kind || '指标')
+  }, [indRef, catalog])
 
   return (
     <div className="flex flex-wrap items-end gap-2">
@@ -540,24 +734,58 @@ function SimpleConditionEditor({ condition, onChange, catalog, baseSymbol }: Sim
             options={SIMPLE_CONDITIONS}
             value={condition.kind}
             onChange={(v) => onChange({ ...condition, kind: String(v) })}
+            minPanelWidth={180}
           />
         </div>
       </div>
 
       {/* 阈值输入 */}
-      <div className="w-[110px]">
+      <div className="w-[140px]">
         <label className="text-[10px] text-[#6B6B7B]">阈值</label>
-        <input
-          type="number"
-          step="any"
-          value={threshold !== undefined && threshold !== null ? String(threshold) : ''}
-          onChange={(e) => {
-            const raw = e.target.value
-            onChange({ ...condition, args: { ...condition.args, threshold: raw === '' ? '' : Number(raw) } })
-          }}
-          placeholder="如 70"
-          className="w-full mt-0.5 bg-[#0C0C14] border border-[#1E1E28] rounded-md px-2 py-1.5 text-sm text-[#E8E8ED] focus:outline-none focus:border-[#00D4AA] font-mono"
-        />
+        {isThresholdRef ? (
+          <div className="mt-0.5 flex items-center gap-1">
+            <span
+              className="flex-1 min-w-0 px-2 py-1.5 text-xs text-[#00D4AA] bg-[#00D4AA]/5 border border-[#00D4AA]/30 rounded-md font-mono truncate"
+              title={threshold as string}
+            >
+              {threshold as string}
+            </span>
+            <button
+              type="button"
+              onClick={() => onChange({ ...condition, args: { ...condition.args, threshold: '' } })}
+              title="清除引用"
+              className="text-[#6B6B7B] hover:text-[#FF4757] p-1.5 shrink-0"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        ) : (
+          <div className="mt-0.5 flex items-center gap-1">
+            <NumberInput
+              value={typeof threshold === 'number' ? threshold : undefined}
+              onChange={(v) => onChange({ ...condition, args: { ...condition.args, threshold: v ?? '' } })}
+              step="any"
+              placeholder="如 70"
+              className="flex-1 min-w-0 bg-[#0C0C14] border border-[#1E1E28] rounded-md px-2 py-1.5 text-sm text-[#E8E8ED] focus:outline-none focus:border-[#00D4AA] font-mono"
+            />
+            {references && references.length > 0 && (
+              <RefPicker
+                references={references}
+                current={threshold}
+                context={{ ruleIndex, fieldType: 'threshold' }}
+                onPick={(r) => {
+                  const wasRef = typeof threshold === 'string' && threshold.startsWith('$')
+                  onChange({ ...condition, args: { ...condition.args, threshold: r } })
+                  // 标签：规则{N}{indicatorLabel}触发阈值
+                  if (setParams) {
+                    const label = `规则${(ruleIndex ?? 0) + 1}${indicatorLabel}触发阈值`
+                    syncParamLabel(setParams, r, label, wasRef)
+                  }
+                }}
+              />
+            )}
+          </div>
+        )}
       </div>
 
       <button
@@ -577,6 +805,11 @@ function SimpleConditionEditor({ condition, onChange, catalog, baseSymbol }: Sim
             onChange={(ref) => onChange({ ...condition, args: { ...condition.args, indicator: ref ?? undefined } })}
             catalog={catalog}
             baseSymbol={baseSymbol}
+            references={references}
+            onRefPick={({ ref, sourceLabel, wasReference }) => {
+              // 指标参数引用：标签沿用指标参数自身的 sourceLabel
+              if (setParams) syncParamLabel(setParams, ref, sourceLabel, wasReference)
+            }}
           />
         </div>
       )}
@@ -594,9 +827,12 @@ interface LogicConditionEditorProps {
   catalog: BlockCatalog
   baseSymbol?: string
   depth?: number
+  references?: string[]
+  setParams?: SetParamsFn
+  ruleIndex?: number
 }
 
-function LogicConditionEditor({ condition, onChange, catalog, baseSymbol, depth = 0 }: LogicConditionEditorProps) {
+function LogicConditionEditor({ condition, onChange, catalog, baseSymbol, depth = 0, references, setParams, ruleIndex }: LogicConditionEditorProps) {
   const block = catalog.conditions.find((b) => b.kind === condition.kind)
 
   if (condition.kind === 'not') {
@@ -621,6 +857,9 @@ function LogicConditionEditor({ condition, onChange, catalog, baseSymbol, depth 
             catalog={catalog}
             baseSymbol={baseSymbol}
             depth={depth + 1}
+            references={references}
+            setParams={setParams}
+            ruleIndex={ruleIndex}
           />
         ) : (
           <button
@@ -674,6 +913,9 @@ function LogicConditionEditor({ condition, onChange, catalog, baseSymbol, depth 
                 catalog={catalog}
                 baseSymbol={baseSymbol}
                 depth={depth + 1}
+                references={references}
+                setParams={setParams}
+                ruleIndex={ruleIndex}
               />
             </div>
             <button
@@ -713,9 +955,12 @@ interface ConditionEditorProps {
   catalog: BlockCatalog
   baseSymbol?: string
   depth?: number
+  references?: string[]
+  setParams?: SetParamsFn
+  ruleIndex?: number
 }
 
-function ConditionEditor({ condition, onChange, catalog, baseSymbol, depth = 0 }: ConditionEditorProps) {
+function ConditionEditor({ condition, onChange, catalog, baseSymbol, depth = 0, references, setParams, ruleIndex }: ConditionEditorProps) {
   const selectedBlock = catalog.conditions.find((b) => b.kind === condition.kind) ?? null
   const isLogic = selectedBlock ? LOGIC_CONDITIONS.has(selectedBlock.kind) : false
   const isSimple = selectedBlock ? SIMPLE_KIND_SET.has(selectedBlock.kind) : false
@@ -755,6 +1000,9 @@ function ConditionEditor({ condition, onChange, catalog, baseSymbol, depth = 0 }
         onChange={onChange}
         catalog={catalog}
         baseSymbol={baseSymbol}
+        references={references}
+        setParams={setParams}
+        ruleIndex={ruleIndex}
       />
     )
   }
@@ -768,6 +1016,9 @@ function ConditionEditor({ condition, onChange, catalog, baseSymbol, depth = 0 }
         catalog={catalog}
         baseSymbol={baseSymbol}
         depth={depth}
+        references={references}
+        setParams={setParams}
+        ruleIndex={ruleIndex}
       />
     )
   }
@@ -775,6 +1026,10 @@ function ConditionEditor({ condition, onChange, catalog, baseSymbol, depth = 0 }
   // 其他条件类型 → 通用表单 + indicator 嵌套
   const schema = normalizeParamSchema(selectedBlock.param_schema)
   const hasIndicatorParam = 'indicator' in schema && schema.indicator?.type === 'object'
+  // 条件参数引用：标签沿用参数自身 sourceLabel
+  const condOnRefPick = setParams
+    ? ({ ref, sourceLabel, wasReference }: BlockRefPickInfo) => syncParamLabel(setParams, ref, sourceLabel, wasReference)
+    : undefined
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2">
@@ -807,12 +1062,16 @@ function ConditionEditor({ condition, onChange, catalog, baseSymbol, depth = 0 }
             args={condition.args}
             onChange={(newArgs) => onChange({ ...condition, args: newArgs })}
             inheritSymbol={baseSymbol}
+            references={references}
+            onRefPick={condOnRefPick}
           />
           <IndicatorRefEditor
             indicatorRef={(condition.args.indicator as BlockRef) ?? null}
             onChange={(ref) => onChange({ ...condition, args: { ...condition.args, indicator: ref } })}
             catalog={catalog}
             baseSymbol={baseSymbol}
+            references={references}
+            onRefPick={condOnRefPick}
           />
         </div>
       ) : (
@@ -821,6 +1080,8 @@ function ConditionEditor({ condition, onChange, catalog, baseSymbol, depth = 0 }
           args={condition.args}
           onChange={(newArgs) => onChange({ ...condition, args: newArgs })}
           inheritSymbol={baseSymbol}
+          references={references}
+          onRefPick={condOnRefPick}
         />
       )}
     </div>
@@ -837,9 +1098,12 @@ interface TriggerEditorProps {
   catalog: BlockCatalog
   label: string
   baseSymbol?: string
+  references?: string[]
+  setParams?: SetParamsFn
+  ruleIndex?: number
 }
 
-function TriggerEditor({ trigger, onChange, catalog, label, baseSymbol }: TriggerEditorProps) {
+function TriggerEditor({ trigger, onChange, catalog, label, baseSymbol, references, setParams, ruleIndex }: TriggerEditorProps) {
   const selectedEvent = trigger.mode === 'event'
     ? catalog.events.find((b) => b.kind === trigger.event?.kind) ?? null
     : null
@@ -847,6 +1111,11 @@ function TriggerEditor({ trigger, onChange, catalog, label, baseSymbol }: Trigge
   const hasMainTrigger = trigger.mode === 'condition'
     ? Boolean(trigger.condition)
     : Boolean(trigger.event)
+
+  // 事件参数引用：标签沿用事件参数自身 sourceLabel
+  const eventOnRefPick = setParams
+    ? ({ ref, sourceLabel, wasReference }: BlockRefPickInfo) => syncParamLabel(setParams, ref, sourceLabel, wasReference)
+    : undefined
 
   return (
     <div className="space-y-2">
@@ -896,6 +1165,9 @@ function TriggerEditor({ trigger, onChange, catalog, label, baseSymbol }: Trigge
               onChange={(condition) => onChange({ ...trigger, condition })}
               catalog={catalog}
               baseSymbol={baseSymbol}
+              references={references}
+              setParams={setParams}
+              ruleIndex={ruleIndex}
             />
           ) : (
             <button
@@ -930,6 +1202,8 @@ function TriggerEditor({ trigger, onChange, catalog, label, baseSymbol }: Trigge
                   args={trigger.event.args}
                   onChange={(newArgs) => onChange({ ...trigger, event: { ...trigger.event!, args: newArgs } })}
                   inheritSymbol={baseSymbol}
+                  references={references}
+                  onRefPick={eventOnRefPick}
                 />
               )}
             </>
@@ -965,6 +1239,9 @@ function TriggerEditor({ trigger, onChange, catalog, label, baseSymbol }: Trigge
                 onChange={(extra) => onChange({ ...trigger, extra_condition: extra })}
                 catalog={catalog}
                 baseSymbol={baseSymbol}
+                references={references}
+                setParams={setParams}
+                ruleIndex={ruleIndex}
               />
             </div>
           ) : (
@@ -992,9 +1269,12 @@ interface ActionListEditorProps {
   catalog: BlockCatalog
   label: string
   baseSymbol?: string
+  references?: string[]
+  setParams?: SetParamsFn
+  ruleIndex?: number
 }
 
-function ActionListEditor({ actions, onChange, catalog, label, baseSymbol }: ActionListEditorProps) {
+function ActionListEditor({ actions, onChange, catalog, label, baseSymbol, references, setParams, ruleIndex }: ActionListEditorProps) {
   return (
     <div className="space-y-2">
       <span className="text-[10px] text-[#6B6B7B] uppercase tracking-wide">{label}</span>
@@ -1003,6 +1283,14 @@ function ActionListEditor({ actions, onChange, catalog, label, baseSymbol }: Act
       )}
       {actions.map((action, idx) => {
         const selectedBlock = catalog.actions.find((b) => b.kind === action.kind) ?? null
+        // 动作参数引用：标签 = 规则{N}{动作label}{参数label}
+        const actionOnRefPick = setParams
+          ? ({ ref, sourceLabel, wasReference }: BlockRefPickInfo) => {
+              const actionLabel = selectedBlock ? blockLabel(selectedBlock) : (action.kind || '动作')
+              const lbl = `规则${(ruleIndex ?? 0) + 1}${actionLabel}${sourceLabel}`
+              syncParamLabel(setParams, ref, lbl, wasReference)
+            }
+          : undefined
         return (
           <div key={idx} className="border border-[#1E1E28] rounded-md p-2 bg-[#0C0C14]/50 space-y-2">
             <div className="flex items-center gap-2">
@@ -1040,6 +1328,8 @@ function ActionListEditor({ actions, onChange, catalog, label, baseSymbol }: Act
                   onChange(newActions)
                 }}
                 inheritSymbol={baseSymbol}
+                references={references}
+                onRefPick={actionOnRefPick}
               />
             )}
           </div>
@@ -1066,9 +1356,12 @@ interface RuleCardProps {
   onDelete: () => void
   catalog: BlockCatalog
   baseSymbol?: string
+  references?: string[]
+  setParams?: SetParamsFn
+  ruleIndex?: number
 }
 
-function RuleCard({ rule, onChange, onDelete, catalog, baseSymbol }: RuleCardProps) {
+function RuleCard({ rule, onChange, onDelete, catalog, baseSymbol, references, setParams, ruleIndex }: RuleCardProps) {
   const [expanded, setExpanded] = useState(true)
   const [showRecover, setShowRecover] = useState(
     Boolean(rule.recover_when || (rule.recover_then && rule.recover_then.length > 0)),
@@ -1143,6 +1436,9 @@ function RuleCard({ rule, onChange, onDelete, catalog, baseSymbol }: RuleCardPro
                 catalog={catalog}
                 label="WHEN"
                 baseSymbol={baseSymbol}
+                references={references}
+                setParams={setParams}
+                ruleIndex={ruleIndex}
               />
 
               {/* THEN */}
@@ -1152,6 +1448,9 @@ function RuleCard({ rule, onChange, onDelete, catalog, baseSymbol }: RuleCardPro
                 catalog={catalog}
                 label="THEN"
                 baseSymbol={baseSymbol}
+                references={references}
+                setParams={setParams}
+                ruleIndex={ruleIndex}
               />
 
               {/* 恢复逻辑 */}
@@ -1176,6 +1475,9 @@ function RuleCard({ rule, onChange, onDelete, catalog, baseSymbol }: RuleCardPro
                     catalog={catalog}
                     label="RECOVER_WHEN"
                     baseSymbol={baseSymbol}
+                    references={references}
+                    setParams={setParams}
+                    ruleIndex={ruleIndex}
                   />
                   <ActionListEditor
                     actions={rule.recover_then ?? []}
@@ -1183,6 +1485,9 @@ function RuleCard({ rule, onChange, onDelete, catalog, baseSymbol }: RuleCardPro
                     catalog={catalog}
                     label="RECOVER_THEN"
                     baseSymbol={baseSymbol}
+                    references={references}
+                    setParams={setParams}
+                    ruleIndex={ruleIndex}
                   />
                 </div>
               ) : (
@@ -1198,11 +1503,10 @@ function RuleCard({ rule, onChange, onDelete, catalog, baseSymbol }: RuleCardPro
               {/* 冷却时间 */}
               <div>
                 <label className="text-[10px] text-[#6B6B7B] uppercase tracking-wide">冷却时间（秒）</label>
-                <input
-                  type="number"
+                <NumberInput
+                  value={rule.cool_down_seconds ?? 0}
+                  onChange={(v) => onChange({ ...rule, cool_down_seconds: v ?? 0 })}
                   min={0}
-                  value={String(rule.cool_down_seconds ?? 0)}
-                  onChange={(e) => onChange({ ...rule, cool_down_seconds: Number(e.target.value) })}
                   className="w-full bg-[#0C0C14] border border-[#1E1E28] rounded-md px-3 py-1.5 text-sm text-[#E8E8ED] mt-0.5 focus:outline-none focus:border-[#00D4AA] font-mono"
                 />
               </div>
@@ -1297,7 +1601,7 @@ function ParamsEditor({ params, onChange }: ParamsEditorProps) {
   function add() {
     let idx = 1
     while (params[`param_${idx}`]) idx++
-    onChange({ ...params, [`param_${idx}`]: { label: `参数 ${idx}`, value: 0, type: 'float' } })
+    onChange({ ...params, [`param_${idx}`]: { label: `参数 ${idx}`, value: 0, type: 'float', label_source: 'custom' } })
   }
 
   return (
@@ -1313,30 +1617,63 @@ function ParamsEditor({ params, onChange }: ParamsEditorProps) {
             placeholder="参数名"
             className="col-span-3 bg-transparent border border-[#1E1E28] rounded px-2 py-1 text-xs text-[#00D4AA] focus:outline-none focus:border-[#00D4AA] font-mono"
           />
-          <input
-            value={def.label}
-            onChange={(e) => update(key, { label: e.target.value })}
-            placeholder="标签"
-            className="col-span-3 bg-transparent border border-[#1E1E28] rounded px-2 py-1 text-xs text-[#E8E8ED] focus:outline-none focus:border-[#00D4AA]"
-          />
+          <div className="col-span-3 flex items-center gap-1">
+            <input
+              value={def.label}
+              onChange={(e) => update(key, { label: e.target.value, label_source: 'custom' })}
+              placeholder="标签"
+              className="flex-1 min-w-0 bg-transparent border border-[#1E1E28] rounded px-2 py-1 text-xs text-[#E8E8ED] focus:outline-none focus:border-[#00D4AA]"
+            />
+            {def.label_source === 'auto' && (
+              <span
+                title="该标签由引用自动同步"
+                className="shrink-0 text-[9px] text-[#00D4AA] bg-[#00D4AA]/10 border border-[#00D4AA]/30 rounded px-1 py-0.5"
+              >
+                自动
+              </span>
+            )}
+          </div>
           <div className="col-span-2">
             <Dropdown
               options={PARAM_TYPES}
               value={def.type}
               onChange={(v) => update(key, { type: v as ParamDefinition['type'] })}
+              minPanelWidth={180}
             />
           </div>
-          <input
-            type={def.type === 'int' || def.type === 'float' ? 'number' : 'text'}
-            value={def.value === undefined || def.value === null ? '' : String(def.value)}
-            onChange={(e) => {
-              const raw = e.target.value
-              const v = def.type === 'int' || def.type === 'float' ? (raw === '' ? '' : Number(raw)) : raw
-              update(key, { value: v })
-            }}
-            placeholder="默认值"
-            className="col-span-2 bg-transparent border border-[#1E1E28] rounded px-2 py-1 text-xs text-[#E8E8ED] focus:outline-none focus:border-[#00D4AA] font-mono"
-          />
+          {def.type === 'select' ? (
+            <div className="col-span-2">
+              <Dropdown
+                options={(def.options ?? []).map((opt, i) => ({
+                  value: String(opt),
+                  label: def.option_labels?.[i] || String(opt),
+                }))}
+                value={def.value !== undefined && def.value !== null ? String(def.value) : ''}
+                onChange={(v) => update(key, { value: v })}
+                placeholder="默认值"
+                minPanelWidth={180}
+              />
+            </div>
+          ) : def.type === 'int' || def.type === 'float' ? (
+            <NumberInput
+              value={typeof def.value === 'number' ? def.value : undefined}
+              onChange={(v) => {
+                if (v === undefined) { update(key, { value: '' }); return }
+                update(key, { value: def.type === 'int' ? Math.trunc(v) : v })
+              }}
+              step={def.type === 'int' ? 1 : undefined}
+              placeholder="默认值"
+              className="col-span-2 bg-transparent border border-[#1E1E28] rounded px-2 py-1 text-xs text-[#E8E8ED] focus:outline-none focus:border-[#00D4AA] font-mono"
+            />
+          ) : (
+            <input
+              type="text"
+              value={def.value === undefined || def.value === null ? '' : String(def.value)}
+              onChange={(e) => update(key, { value: e.target.value })}
+              placeholder="默认值"
+              className="col-span-2 bg-transparent border border-[#1E1E28] rounded px-2 py-1 text-xs text-[#E8E8ED] focus:outline-none focus:border-[#00D4AA] font-mono"
+            />
+          )}
           <div className="col-span-1 flex items-center justify-center">
             <button
               type="button"
@@ -1349,11 +1686,9 @@ function ParamsEditor({ params, onChange }: ParamsEditorProps) {
           {(def.type === 'int' || def.type === 'float') && (
             <div className="col-span-12 flex items-center gap-1 text-[10px] text-[#6B6B7B]">
               <span>范围</span>
-              <input
-                type="number"
-                value={def.range ? String(def.range[0]) : ''}
-                onChange={(e) => {
-                  const lo = e.target.value === '' ? undefined : Number(e.target.value)
+              <NumberInput
+                value={def.range ? def.range[0] : undefined}
+                onChange={(lo) => {
                   const hi = def.range?.[1]
                   update(key, { range: lo !== undefined || hi !== undefined ? [lo ?? 0, hi ?? 0] : undefined })
                 }}
@@ -1361,17 +1696,70 @@ function ParamsEditor({ params, onChange }: ParamsEditorProps) {
                 className="w-16 bg-transparent border border-[#1E1E28] rounded px-1 py-0.5 text-[10px] text-[#E8E8ED] focus:outline-none focus:border-[#00D4AA] font-mono"
               />
               <span>~</span>
-              <input
-                type="number"
-                value={def.range ? String(def.range[1]) : ''}
-                onChange={(e) => {
-                  const hi = e.target.value === '' ? undefined : Number(e.target.value)
+              <NumberInput
+                value={def.range ? def.range[1] : undefined}
+                onChange={(hi) => {
                   const lo = def.range?.[0]
                   update(key, { range: lo !== undefined || hi !== undefined ? [lo ?? 0, hi ?? 0] : undefined })
                 }}
                 placeholder="上限"
                 className="w-16 bg-transparent border border-[#1E1E28] rounded px-1 py-0.5 text-[10px] text-[#E8E8ED] focus:outline-none focus:border-[#00D4AA] font-mono"
               />
+            </div>
+          )}
+          {def.type === 'select' && (
+            <div className="col-span-12 space-y-1 border-t border-[#1E1E28]/50 pt-1.5">
+              <div className="text-[10px] text-[#6B6B7B]">枚举选项（值 + 中文标签）</div>
+              {(def.options ?? []).map((opt, i) => (
+                <div key={i} className="flex items-center gap-1">
+                  <input
+                    value={String(opt ?? '')}
+                    onChange={(e) => {
+                      const next = [...(def.options ?? [])]
+                      next[i] = e.target.value
+                      update(key, { options: next })
+                    }}
+                    placeholder="值"
+                    className="flex-1 min-w-0 bg-transparent border border-[#1E1E28] rounded px-1.5 py-0.5 text-[10px] text-[#00D4AA] focus:outline-none focus:border-[#00D4AA] font-mono"
+                  />
+                  <input
+                    value={def.option_labels?.[i] ?? ''}
+                    onChange={(e) => {
+                      const next = [...(def.option_labels ?? [])]
+                      next[i] = e.target.value
+                      update(key, { option_labels: next })
+                    }}
+                    placeholder="中文标签"
+                    className="flex-1 min-w-0 bg-transparent border border-[#1E1E28] rounded px-1.5 py-0.5 text-[10px] text-[#E8E8ED] focus:outline-none focus:border-[#00D4AA]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const opts = (def.options ?? []).filter((_, j) => j !== i)
+                      const labels = (def.option_labels ?? []).filter((_, j) => j !== i)
+                      const patch: Partial<ParamDefinition> = { options: opts, option_labels: labels }
+                      // 若删除了当前默认值选项，清空默认值
+                      if (def.value !== undefined && def.value !== null && !opts.includes(String(def.value))) {
+                        patch.value = opts[0] ?? ''
+                      }
+                      update(key, patch)
+                    }}
+                    className="text-[#6B6B7B] hover:text-[#FF4757] p-0.5 shrink-0"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={() => update(key, {
+                  options: [...(def.options ?? []), ''],
+                  option_labels: [...(def.option_labels ?? []), ''],
+                })}
+                className="text-[10px] text-[#00D4AA] hover:underline"
+              >
+                + 添加选项
+              </button>
             </div>
           )}
         </div>
@@ -1395,6 +1783,50 @@ interface DslEditorProps {
   open: boolean
   onClose: () => void
   onSaved: () => void
+  editingTemplateId?: number | null
+  templates?: StrategyTemplate[]
+}
+
+/** 「无基础策略」伪积木（kind 为 null，BlockPicker 用 '__none__' 占位展示）。 */
+const NONE_BASE_STRATEGY: BlockMeta = {
+  kind: '__none__',
+  label: '无（纯规则驱动）',
+  category: '特殊',
+  description: '不使用基础策略，完全由规则驱动',
+  param_schema: {},
+  output_type: '',
+  priority: 'P0',
+}
+
+/** 将 QS-Model params 拍平为 StrategiesPage 兼容的 param_schema 格式。 */
+function flattenParamsToSchema(params: Record<string, ParamDefinition>): Record<string, unknown> {
+  const schema: Record<string, unknown> = {}
+  for (const [key, def] of Object.entries(params)) {
+    let fieldType: 'number' | 'string' | 'select' | 'boolean'
+    switch (def.type) {
+      case 'int': case 'float': case 'number': fieldType = 'number'; break
+      case 'bool': fieldType = 'boolean'; break
+      case 'select': fieldType = 'select'; break
+      default: fieldType = 'string'
+    }
+    const field: Record<string, unknown> = {
+      label: def.label,
+      type: fieldType,
+      default: def.value,
+    }
+    if (def.range) {
+      if (def.range[0] !== undefined) field.min = def.range[0]
+      if (def.range[1] !== undefined) field.max = def.range[1]
+    }
+    if (def.type === 'int') field.step = 1
+    else if (def.type === 'float' || def.type === 'number') field.step = 'any'
+    if (def.description) field.hint = def.description
+    if (def.type === 'select' && def.options && def.options.length > 0) {
+      field.options = def.options.map((o) => String(o))
+    }
+    schema[key] = field
+  }
+  return schema
 }
 
 function initialConfig(): DslConfig {
@@ -1417,11 +1849,11 @@ function initialMeta(): QSModelMeta {
     description: '',
     asset_class: 'crypto',
     frequency: '1H',
-    base_symbol: 'BTC-USDT',
+    base_symbol: '',
   }
 }
 
-export default function DslEditor({ open, onClose, onSaved }: DslEditorProps) {
+export default function DslEditor({ open, onClose, onSaved, editingTemplateId = null, templates }: DslEditorProps) {
   const [catalog, setCatalog] = useState<BlockCatalog | null>(null)
   const [dslConfig, setDslConfig] = useState<DslConfig>(initialConfig)
   const [meta, setMeta] = useState<QSModelMeta>(initialMeta)
@@ -1438,6 +1870,8 @@ export default function DslEditor({ open, onClose, onSaved }: DslEditorProps) {
   const [saving, setSaving] = useState(false)
   const [showDryRunDetail, setShowDryRunDetail] = useState(false)
   const [dupConfirm, setDupConfirm] = useState<string | null>(null)
+  const [symbolError, setSymbolError] = useState<string | null>(null)
+  const [riskFilterEnabled, setRiskFilterEnabled] = useState(false)
 
   useEffect(() => {
     if (open && !catalog) {
@@ -1445,15 +1879,51 @@ export default function DslEditor({ open, onClose, onSaved }: DslEditorProps) {
     }
   }, [open, catalog])
 
+  // 编辑模式：editingTemplateId 非空时加载模板配置填充各区；新建模式重置为初始值
+  useEffect(() => {
+    if (!open) return
+    if (editingTemplateId != null) {
+      const tpl = templates?.find((t) => t.id === editingTemplateId)
+      if (tpl?.qs_model_config) {
+        const qm = tpl.qs_model_config
+        setMeta(qm.meta ?? initialMeta())
+        setParams(qm.params ?? {})
+        setDslConfig(qm.logic ?? initialConfig())
+        if (qm.risk_filter) {
+          setRiskFilter(qm.risk_filter)
+          setRiskFilterEnabled(true)
+        } else {
+          setRiskFilter({ max_position_ratio: 0.5, daily_max_loss: 0.05, min_trade_size: 0 })
+          setRiskFilterEnabled(false)
+        }
+        setValidation(null)
+        setDryRunResult(null)
+        setDupConfirm(null)
+        setSymbolError(null)
+      }
+    } else {
+      setDslConfig(initialConfig())
+      setMeta(initialMeta())
+      setParams({})
+      setRiskFilter({ max_position_ratio: 0.5, daily_max_loss: 0.05, min_trade_size: 0 })
+      setRiskFilterEnabled(false)
+      setValidation(null)
+      setDryRunResult(null)
+      setDupConfirm(null)
+      setSymbolError(null)
+    }
+  }, [open, editingTemplateId, templates])
+
   const baseStrategyBlock = catalog?.base_strategies.find((b) => b.kind === dslConfig.base_strategy.kind) ?? null
 
-  // 基础交易对：meta.base_symbol 为唯一来源，与基础策略 symbol 双向同步
+  // 基础交易对：meta.base_symbol 为唯一来源，与基础策略 symbol 双向同步（不默认 BTC-USDT）
   const baseSymbol = useMemo(() => {
     const fromStrategy = dslConfig.base_strategy.params.symbol
-    return (meta.base_symbol || (typeof fromStrategy === 'string' ? fromStrategy : '') || 'BTC-USDT')
+    return (meta.base_symbol || (typeof fromStrategy === 'string' ? fromStrategy : ''))
   }, [meta.base_symbol, dslConfig.base_strategy.params.symbol])
 
   function handleBaseSymbolChange(sym: string) {
+    setSymbolError(null)
     setMeta((m) => ({ ...m, base_symbol: sym }))
     setDslConfig((c) => ({
       ...c,
@@ -1463,6 +1933,12 @@ export default function DslEditor({ open, onClose, onSaved }: DslEditorProps) {
       },
     }))
   }
+
+  // LOGIC 区是否有内容：仅规则视为逻辑内容（基础策略 kind 默认 'grid'，不强制交易对）
+  const hasLogicContent = dslConfig.rules.length > 0
+  // 基础策略为「无」时，规则级 symbol 不再继承，改由 SymbolPicker 显式选择
+  const isBaseStrategyNone = dslConfig.base_strategy.kind === null
+  const ruleInheritSymbol = isBaseStrategyNone ? undefined : baseSymbol
 
   // 引用变量候选（供基础策略参数引用 $params.xxx / $meta.base_symbol）
   const referenceOptions = useMemo(() => {
@@ -1557,19 +2033,38 @@ export default function DslEditor({ open, onClose, onSaved }: DslEditorProps) {
       meta: { ...meta, name: meta.name.trim(), base_symbol: baseSymbol },
       params,
       logic,
-      risk_filter: riskFilter,
+      risk_filter: riskFilterEnabled ? riskFilter : null,
     }
   }
 
+  // base_symbol 为空且存在基础策略时，将 base_strategy.params.symbol 设为引用占位符，
+  // 实际交易对在实例创建时填充
+  function applySymbolPlaceholder(config: DslConfig): DslConfig {
+    if (!baseSymbol && config.base_strategy.kind) {
+      return {
+        ...config,
+        base_strategy: {
+          ...config.base_strategy,
+          params: { ...config.base_strategy.params, symbol: '$meta.base_symbol' },
+        },
+      }
+    }
+    return config
+  }
+
   async function doCreate(force: boolean) {
-    const syncedConfig = syncRulesSymbol(dslConfig, baseSymbol)
+    // 基础策略为「无」时不强制同步规则 symbol（规则自带 SymbolPicker 显式选择）
+    const isBaseStrategyNone = !dslConfig.base_strategy.kind
+    const syncedConfig = applySymbolPlaceholder(
+      isBaseStrategyNone ? dslConfig : syncRulesSymbol(dslConfig, baseSymbol),
+    )
     const qsModel = buildQsModelConfig(syncedConfig)
     const res = await createTemplate({
       name: meta.name.trim(),
       strategy_type: 'composable',
       description: meta.description,
       default_params: { symbol: baseSymbol },
-      param_schema: null,
+      param_schema: flattenParamsToSchema(params),
       dsl_config: syncedConfig as unknown as Record<string, unknown>,
       qs_model_config: qsModel,
       force,
@@ -1577,24 +2072,54 @@ export default function DslEditor({ open, onClose, onSaved }: DslEditorProps) {
     return res.data
   }
 
+  async function doUpdate() {
+    const isBaseStrategyNone = !dslConfig.base_strategy.kind
+    const syncedConfig = applySymbolPlaceholder(
+      isBaseStrategyNone ? dslConfig : syncRulesSymbol(dslConfig, baseSymbol),
+    )
+    const qsModel = buildQsModelConfig(syncedConfig)
+    const res = await updateTemplate(editingTemplateId!, {
+      name: meta.name.trim(),
+      description: meta.description,
+      default_params: { symbol: baseSymbol },
+      param_schema: flattenParamsToSchema(params),
+      dsl_config: syncedConfig as unknown as Record<string, unknown>,
+      qs_model_config: qsModel,
+    })
+    return res.data
+  }
+
   async function handleSave() {
     if (!meta.name.trim()) return
+    // 保存校验：仅纯规则策略（无基础策略）有规则时才强制选择基准交易对
+    if (dslConfig.rules.length > 0 && !dslConfig.base_strategy?.kind && !baseSymbol) {
+      setSymbolError('纯规则策略需要选择基准交易对')
+      return
+    }
+    setSymbolError(null)
     if (!validation?.valid) {
       await handleValidate()
       return
     }
     setSaving(true)
     try {
-      const created = await doCreate(false)
-      // 检测哈希去重提示
-      if (created?.duplicate_hint) {
-        setDupConfirm(created.duplicate_hint)
-        setSaving(false)
-        return
+      if (editingTemplateId != null) {
+        await doUpdate()
+        onSaved()
+        onClose()
+        handleClose()
+      } else {
+        const created = await doCreate(false)
+        // 检测哈希去重提示
+        if (created?.duplicate_hint) {
+          setDupConfirm(created.duplicate_hint)
+          setSaving(false)
+          return
+        }
+        onSaved()
+        onClose()
+        handleClose()
       }
-      onSaved()
-      onClose()
-      handleClose()
     } catch {
       /* ignore */
     }
@@ -1620,9 +2145,11 @@ export default function DslEditor({ open, onClose, onSaved }: DslEditorProps) {
     setMeta(initialMeta())
     setParams({})
     setRiskFilter({ max_position_ratio: 0.5, daily_max_loss: 0.05, min_trade_size: 0 })
+    setRiskFilterEnabled(false)
     setValidation(null)
     setDryRunResult(null)
     setDupConfirm(null)
+    setSymbolError(null)
   }
 
   function addRule() {
@@ -1640,7 +2167,7 @@ export default function DslEditor({ open, onClose, onSaved }: DslEditorProps) {
   }
 
   return (
-    <Modal open={open} onClose={onClose} title="QS-Model 策略构建" wide scrollable={false}>
+    <Modal open={open} onClose={onClose} title={editingTemplateId != null ? '编辑 QS-Model 模板' : 'QS-Model 策略构建'} wide scrollable={false}>
       <div className="space-y-4 max-h-[calc(100vh-12rem)] overflow-y-auto pr-1">
         {/* ============ META 区 ============ */}
         <div className="border border-[#1E1E28] rounded-lg p-3 bg-[#14141A]/50">
@@ -1680,7 +2207,11 @@ export default function DslEditor({ open, onClose, onSaved }: DslEditorProps) {
                   ]}
                   value={meta.frequency}
                   onChange={(v) => setMeta({ ...meta, frequency: String(v) })}
+                  minPanelWidth={180}
                 />
+              </div>
+              <div className="text-[10px] text-[#6B6B7B]/70 mt-1 leading-relaxed">
+                此字段为元信息，实际 K 线周期请在基础策略参数中配置
               </div>
             </div>
             <div className="sm:col-span-2">
@@ -1722,10 +2253,15 @@ export default function DslEditor({ open, onClose, onSaved }: DslEditorProps) {
             {catalog ? (
               <>
                 <BlockPicker
-                  blocks={catalog.base_strategies}
-                  value={dslConfig.base_strategy.kind || null}
+                  blocks={[NONE_BASE_STRATEGY, ...catalog.base_strategies]}
+                  value={dslConfig.base_strategy.kind === null ? '__none__' : dslConfig.base_strategy.kind}
                   onChange={(kind) => {
                     if (!kind) return
+                    // 选中「无（纯规则驱动）」：清空基础策略
+                    if (kind === '__none__') {
+                      setDslConfig({ ...dslConfig, base_strategy: { kind: null, params: {} } })
+                      return
+                    }
                     const block = catalog.base_strategies.find((b) => b.kind === kind)
                     const defaultArgs = block ? getDefaultArgs(normalizeParamSchema(block.param_schema)) : {}
                     defaultArgs.symbol = baseSymbol
@@ -1733,7 +2269,7 @@ export default function DslEditor({ open, onClose, onSaved }: DslEditorProps) {
                   }}
                   placeholder="选择基础策略"
                 />
-                {baseStrategyBlock && (
+                {baseStrategyBlock && dslConfig.base_strategy.kind !== null && (
                   <BlockArgsForm
                     block={baseStrategyBlock}
                     args={dslConfig.base_strategy.params}
@@ -1742,6 +2278,10 @@ export default function DslEditor({ open, onClose, onSaved }: DslEditorProps) {
                       base_strategy: { ...dslConfig.base_strategy, params: p },
                     })}
                     references={referenceOptions}
+                    onRefPick={({ ref, sourceLabel, wasReference }) => {
+                      // 基础策略参数引用：标签沿用参数自身 sourceLabel（如"价格上限"）
+                      syncParamLabel(setParams, ref, sourceLabel, wasReference)
+                    }}
                   />
                 )}
               </>
@@ -1775,7 +2315,10 @@ export default function DslEditor({ open, onClose, onSaved }: DslEditorProps) {
                       setDslConfig({ ...dslConfig, rules: dslConfig.rules.filter((_, i) => i !== idx) })
                     }}
                     catalog={catalog}
-                    baseSymbol={baseSymbol}
+                    baseSymbol={ruleInheritSymbol}
+                    references={referenceOptions}
+                    setParams={setParams}
+                    ruleIndex={idx}
                   />
                 ))}
                 <button
@@ -1796,41 +2339,83 @@ export default function DslEditor({ open, onClose, onSaved }: DslEditorProps) {
 
         {/* ============ RISK_FILTER 区（可折叠） ============ */}
         <CollapsibleSection title="RISK_FILTER 风控过滤" icon={<Shield className="w-3 h-3" />} defaultCollapsed accent="#F0A500">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-            <div>
-              <label className="text-[10px] text-[#6B6B7B]">最大持仓比例</label>
-              <input
-                type="number"
-                step="0.01"
-                min={0}
-                max={1}
-                value={String(riskFilter.max_position_ratio ?? 0)}
-                onChange={(e) => setRiskFilter({ ...riskFilter, max_position_ratio: Number(e.target.value) })}
-                className="w-full bg-[#0C0C14] border border-[#1E1E28] rounded-md px-2 py-1.5 text-sm text-[#E8E8ED] mt-0.5 focus:outline-none focus:border-[#00D4AA] font-mono"
-              />
-            </div>
-            <div>
-              <label className="text-[10px] text-[#6B6B7B]">日内最大亏损</label>
-              <input
-                type="number"
-                step="0.01"
-                value={String(riskFilter.daily_max_loss ?? 0)}
-                onChange={(e) => setRiskFilter({ ...riskFilter, daily_max_loss: Number(e.target.value) })}
-                className="w-full bg-[#0C0C14] border border-[#1E1E28] rounded-md px-2 py-1.5 text-sm text-[#E8E8ED] mt-0.5 focus:outline-none focus:border-[#00D4AA] font-mono"
-              />
-            </div>
-            <div>
-              <label className="text-[10px] text-[#6B6B7B]">最小交易量</label>
-              <input
-                type="number"
-                step="any"
-                value={String(riskFilter.min_trade_size ?? 0)}
-                onChange={(e) => setRiskFilter({ ...riskFilter, min_trade_size: Number(e.target.value) })}
-                className="w-full bg-[#0C0C14] border border-[#1E1E28] rounded-md px-2 py-1.5 text-sm text-[#E8E8ED] mt-0.5 focus:outline-none focus:border-[#00D4AA] font-mono"
-              />
-            </div>
+          {/* 启用风控开关 */}
+          <div className="flex items-center justify-between mb-2 pb-2 border-b border-[#1E1E28]/50">
+            <span className="text-[10px] text-[#6B6B7B] uppercase tracking-wide">启用风控</span>
+            <button
+              type="button"
+              onClick={() => setRiskFilterEnabled(!riskFilterEnabled)}
+              className={`relative w-10 h-5 rounded-full transition-colors ${riskFilterEnabled ? 'bg-[#00D4AA]' : 'bg-[#1E1E28]'}`}
+            >
+              <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-[#E8E8ED] transition-transform ${riskFilterEnabled ? 'translate-x-5' : ''}`} />
+            </button>
           </div>
+          {riskFilterEnabled ? (
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <div>
+                <label className="text-[10px] text-[#6B6B7B]">最大持仓比例</label>
+                <NumberInput
+                  value={riskFilter.max_position_ratio ?? 0}
+                  onChange={(v) => setRiskFilter({ ...riskFilter, max_position_ratio: v ?? 0 })}
+                  step="0.01"
+                  min={0}
+                  max={1}
+                  className="w-full bg-[#0C0C14] border border-[#1E1E28] rounded-md px-2 py-1.5 text-sm text-[#E8E8ED] mt-0.5 focus:outline-none focus:border-[#00D4AA] font-mono"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] text-[#6B6B7B]">日内最大亏损</label>
+                <NumberInput
+                  value={riskFilter.daily_max_loss ?? 0}
+                  onChange={(v) => setRiskFilter({ ...riskFilter, daily_max_loss: v ?? 0 })}
+                  step="0.01"
+                  className="w-full bg-[#0C0C14] border border-[#1E1E28] rounded-md px-2 py-1.5 text-sm text-[#E8E8ED] mt-0.5 focus:outline-none focus:border-[#00D4AA] font-mono"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] text-[#6B6B7B]">最小交易量</label>
+                <NumberInput
+                  value={riskFilter.min_trade_size ?? 0}
+                  onChange={(v) => setRiskFilter({ ...riskFilter, min_trade_size: v ?? 0 })}
+                  step="any"
+                  className="w-full bg-[#0C0C14] border border-[#1E1E28] rounded-md px-2 py-1.5 text-sm text-[#E8E8ED] mt-0.5 focus:outline-none focus:border-[#00D4AA] font-mono"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] text-[#6B6B7B]">止损 stop_loss（%）</label>
+                <NumberInput
+                  value={riskFilter.stop_loss}
+                  onChange={(v) => setRiskFilter({ ...riskFilter, stop_loss: v })}
+                  step="0.01"
+                  min={0}
+                  placeholder="如 5 表示 5%"
+                  className="w-full bg-[#0C0C14] border border-[#1E1E28] rounded-md px-2 py-1.5 text-sm text-[#E8E8ED] mt-0.5 focus:outline-none focus:border-[#00D4AA] font-mono"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] text-[#6B6B7B]">止盈 take_profit（%）</label>
+                <NumberInput
+                  value={riskFilter.take_profit}
+                  onChange={(v) => setRiskFilter({ ...riskFilter, take_profit: v })}
+                  step="0.01"
+                  min={0}
+                  placeholder="如 10 表示 10%"
+                  className="w-full bg-[#0C0C14] border border-[#1E1E28] rounded-md px-2 py-1.5 text-sm text-[#E8E8ED] mt-0.5 focus:outline-none focus:border-[#00D4AA] font-mono"
+                />
+              </div>
+            </div>
+          ) : (
+            <div className="text-xs text-[#6B6B7B] italic">风控已关闭，risk_filter 将以 null 保存</div>
+          )}
         </CollapsibleSection>
+
+        {/* 基准交易对缺失提示 */}
+        {symbolError && (
+          <div className="flex items-center gap-2 text-xs text-[#FF4757] bg-[#FF4757]/5 border border-[#FF4757]/20 rounded-md px-3 py-2">
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+            <span>{symbolError}</span>
+          </div>
+        )}
 
         {/* 操作按钮区 */}
         <div className="flex flex-wrap gap-2">
@@ -1856,7 +2441,7 @@ export default function DslEditor({ open, onClose, onSaved }: DslEditorProps) {
             className="flex items-center gap-1.5 bg-[#00D4AA] text-[#0A0A0F] rounded-md px-3 py-2 text-xs font-semibold hover:bg-[#00D4AA]/90 disabled:opacity-50 transition-colors ml-auto"
           >
             {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-            保存模板
+            {editingTemplateId != null ? '更新模板' : '保存模板'}
           </button>
         </div>
 

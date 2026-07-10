@@ -26,6 +26,9 @@ class BaseStrategy(ABC):
         self._realized_pnl = 0.0
         self._buy_trades: list[dict] = []
         self._initial_equity = 0.0
+        self._last_pnl_record_ts: float = 0.0
+        self._last_pnl_total: float = 0.0
+        self._fee_rate = float(self.params.get("fee_rate", 0.001))
 
         # OrderManager setup
         if order_manager is not None:
@@ -82,7 +85,34 @@ class BaseStrategy(ABC):
             if symbol:
                 inst_type = "SWAP" if "-SWAP" in symbol else "SPOT"
                 await self._ws_client.subscribe_orders(inst_type, symbol)
+        # 注册 WebSocket 订单更新回调，实现实时订单状态同步
+        if self._ws_client:
+            self._ws_client.on_order_update(self._on_ws_order_update)
         self._record_event("started", "策略已启动")
+
+    def _on_ws_order_update(self, ord_id: str, state: str, order_data: dict):
+        """WebSocket 订单更新回调：解析订单数据并同步到 OrderManager。
+
+        由 OKXWsClient._handle_data 在收到 orders 频道推送时调用。
+        异常被捕获并记录事件，不抛出以避免阻塞 WS message_loop。
+        """
+        try:
+            fill_px = order_data.get("fillPx", "")
+            fill_sz = order_data.get("fillSz", "")
+            fee = order_data.get("fee", "")
+            self.order_manager.update_order(
+                ord_id,
+                state=state,
+                fillPx=fill_px,
+                fillSz=fill_sz,
+                fee=fee,
+            )
+        except Exception as e:
+            self._record_event(
+                "error",
+                f"WS 订单回调处理异常: ordId={ord_id} state={state} err={e}",
+                {"ord_id": ord_id, "state": state},
+            )
 
     def pause(self):
         self._paused = True
@@ -231,6 +261,30 @@ class BaseStrategy(ABC):
                            {"symbol": symbol, "side": side, "order_type": order_type,
                             "price": price, "quantity": quantity, "order_id": order_id, "status": status})
 
+    def _should_record_pnl(self, total_pnl: float, interval_seconds: float = 60.0, change_threshold: float = 0.01) -> bool:
+        """判断是否应写入 PnL 记录：间隔 ≥ 60s 或 total_pnl 变化超阈值。"""
+        import time
+        now = time.time()
+        if now - self._last_pnl_record_ts >= interval_seconds:
+            return True
+        if self._last_pnl_record_ts > 0:
+            delta = abs(total_pnl - self._last_pnl_total)
+            if self._last_pnl_total != 0:
+                # 有基准值时用相对变化率
+                if delta / abs(self._last_pnl_total) > change_threshold:
+                    return True
+            else:
+                # 无基准值（首次从0变化）时用绝对变化量
+                if delta > 0.01:
+                    return True
+        return False
+
+    def _mark_pnl_recorded(self, total_pnl: float):
+        """记录已写入 PnL，更新时间戳与上次值。"""
+        import time
+        self._last_pnl_record_ts = time.time()
+        self._last_pnl_total = total_pnl
+
     def record_pnl(self, equity: float, unrealized_pnl: float, realized_pnl: float):
         from models.pnl import PnlRecord
         db = self.db_session_factory()
@@ -245,12 +299,11 @@ class BaseStrategy(ABC):
             )
             db.add(record)
             db.commit()
+        except Exception as e:
+            db.rollback()
+            print(f"[BaseStrategy] record_pnl error: {e}")
         finally:
             db.close()
-
-        self._record_event("pnl_recorded",
-                           f"equity={equity} unrealized={unrealized_pnl} realized={realized_pnl}",
-                           {"equity": equity, "unrealized_pnl": unrealized_pnl, "realized_pnl": realized_pnl})
 
     def record_final_pnl(self):
         """策略停止时写一条 unrealized_pnl=0 的最终 PnL 记录。"""
@@ -266,18 +319,20 @@ class BaseStrategy(ABC):
                 realized = latest.realized_pnl if latest else self.get_realized_pnl()
                 equity = latest.equity if latest else 0
 
+                last_unrealized = latest.unrealized_pnl if latest else 0
                 record = PnlRecord(
                     account_id=self.account_id,
                     strategy_instance_id=self.instance_id,
                     equity=equity,
-                    unrealized_pnl=0,  # 停止后清零
+                    unrealized_pnl=last_unrealized,  # 保留最后浮动盈亏（不再清零）
                     realized_pnl=realized,
-                    total_pnl=realized,  # 0 + realized
+                    total_pnl=last_unrealized + realized,
+                    is_final=True,
                     recorded_at=datetime.now(timezone.utc),
                 )
                 db.add(record)
                 db.commit()
-                self._record_event("stopped", f"策略已停止，最终 PnL: equity={equity}, realized={realized}, unrealized=0")
+                self._record_event("stopped", f"策略已停止，最终 PnL: equity={equity}, realized={realized}, unrealized={last_unrealized}")
             finally:
                 db.close()
         except Exception as e:

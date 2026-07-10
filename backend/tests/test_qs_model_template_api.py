@@ -14,6 +14,7 @@ import sys
 import os
 import hashlib
 import json
+import copy
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -599,6 +600,336 @@ def test_different_logic_produces_different_hash(test_env):
 
     assert hash_a != hash_b, "不同 logic 段应产生不同 logic_hash"
     assert resp_b.json()["duplicate_hint"] is None, "不同逻辑不应触发去重"
+
+
+# ============================================================
+# 8. PUT /api/strategies/templates/{id} —— 部分更新模板
+# ============================================================
+
+
+def _create_template(client, name="PUT-测试模板", config=None):
+    """创建一个含 qs_model_config 的模板，返回 (id, logic_hash, 响应)。"""
+    resp = client.post(
+        "/api/strategies/templates",
+        json={
+            "name": name,
+            "strategy_type": "composable",
+            "description": "初始描述",
+            "default_params": {"symbol": "BTC-USDT", "order_qty": 0.01},
+            "param_schema": {"order_qty": {"type": "float"}},
+            "qs_model_config": config if config is not None else VALID_QS_MODEL_CONFIG,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()["id"], resp.json()["logic_hash"], resp.json()
+
+
+def test_update_template_partial_fields(test_env):
+    """PUT /templates/{id} 仅更新提供的字段：
+    - 更新 name / description / default_params
+    - 未提供的 qs_model_config / dsl_config / logic_hash 保持原值
+    - 响应返回更新后的模板对象
+    """
+    client, SessionLocal, _ = test_env
+
+    template_id, original_hash, _ = _create_template(client, name="PUT-部分更新")
+
+    resp = client.put(
+        f"/api/strategies/templates/{template_id}",
+        json={
+            "name": "PUT-新名称",
+            "description": "更新后的描述",
+            "default_params": {"symbol": "ETH-USDT", "order_qty": 0.02},
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+
+    # 提供的字段被更新
+    assert data["id"] == template_id
+    assert data["name"] == "PUT-新名称"
+    assert data["description"] == "更新后的描述"
+    assert data["default_params"] == {"symbol": "ETH-USDT", "order_qty": 0.02}
+
+    # 未提供的字段保持原值
+    assert data["qs_model_config"] is not None
+    assert data["qs_model_config"]["meta"]["base_symbol"] == "BTC-USDT"
+    assert data["param_schema"] == {"order_qty": {"type": "float"}}
+    # logic_hash 未变（qs_model_config 未提供）
+    assert data["logic_hash"] == original_hash
+
+    # 数据库中字段已更新
+    db = SessionLocal()
+    try:
+        from models.strategy import StrategyTemplate
+
+        tmpl = db.query(StrategyTemplate).filter(StrategyTemplate.id == template_id).first()
+        assert tmpl.name == "PUT-新名称"
+        assert tmpl.description == "更新后的描述"
+        assert tmpl.default_params == {"symbol": "ETH-USDT", "order_qty": 0.02}
+        assert tmpl.logic_hash == original_hash
+    finally:
+        db.close()
+
+
+def test_update_nonexistent_template_returns_404(test_env):
+    """PUT 不存在的模板 id 返回 404。"""
+    client, _, _ = test_env
+
+    resp = client.put(
+        "/api/strategies/templates/999999",
+        json={"name": "不存在"},
+    )
+    assert resp.status_code == 404, resp.text
+    assert "不存在" in resp.json()["detail"]
+
+
+def test_update_template_logic_hash_recompute(test_env):
+    """PUT 更新 qs_model_config.logic 段时重新计算 logic_hash：
+    - 修改 logic.base_strategy.params.grid_count
+    - logic_hash 变为新 logic 段的 SHA-256
+    - 新旧 logic_hash 不同
+    """
+    client, SessionLocal, _ = test_env
+
+    template_id, original_hash, _ = _create_template(client, name="PUT-logic-重算")
+    assert original_hash is not None
+
+    # 构造修改了 logic 段的新 qs_model_config（grid_count 从 10 改为 20）
+    new_config = copy.deepcopy(VALID_QS_MODEL_CONFIG)
+    new_config["logic"]["base_strategy"]["params"]["grid_count"] = 20
+
+    resp = client.put(
+        f"/api/strategies/templates/{template_id}",
+        json={"qs_model_config": new_config},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+
+    # logic_hash 被重算为新值
+    assert data["logic_hash"] is not None
+    assert data["logic_hash"] != original_hash, "logic 段变化后 logic_hash 应更新"
+
+    # 新 logic_hash 与预期一致
+    expected = _expected_logic_hash(qs_model_config=new_config)
+    assert data["logic_hash"] == expected, f"logic_hash 不匹配：{data['logic_hash']} != {expected}"
+
+    # qs_model_config 已更新（meta 等非 logic 段保留为新传入值）
+    assert data["qs_model_config"]["logic"]["base_strategy"]["params"]["grid_count"] == 20
+
+    # 数据库中 logic_hash 已更新
+    db = SessionLocal()
+    try:
+        from models.strategy import StrategyTemplate
+
+        tmpl = db.query(StrategyTemplate).filter(StrategyTemplate.id == template_id).first()
+        assert tmpl.logic_hash == expected
+        assert tmpl.qs_model_config["logic"]["base_strategy"]["params"]["grid_count"] == 20
+    finally:
+        db.close()
+
+
+def test_update_template_logic_unchanged_keeps_hash(test_env):
+    """PUT 更新 qs_model_config 但 logic 段未变化时保留原 logic_hash：
+    - 仅修改 meta.base_symbol（非 logic 段）
+    - logic_hash 保持不变
+    """
+    client, _, _ = test_env
+
+    template_id, original_hash, _ = _create_template(client, name="PUT-logic-未变")
+    assert original_hash is not None
+
+    # 仅修改 meta 段（logic 段保持引用相同）
+    new_config = copy.deepcopy(VALID_QS_MODEL_CONFIG)
+    new_config["meta"]["base_symbol"] = "ETH-USDT"
+
+    resp = client.put(
+        f"/api/strategies/templates/{template_id}",
+        json={"qs_model_config": new_config},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+
+    # logic_hash 保持不变
+    assert data["logic_hash"] == original_hash, "logic 段未变化时 logic_hash 应保留原值"
+    # meta 已更新
+    assert data["qs_model_config"]["meta"]["base_symbol"] == "ETH-USDT"
+
+
+# ============================================================
+# 9. create_instance 币对锁定：模板 meta.base_symbol 非空时强制 symbol
+# ============================================================
+
+
+def test_create_instance_symbol_locked_by_base_symbol(test_env):
+    """模板 qs_model_config.meta.base_symbol="BTC-USDT" 时，前端传 symbol="ETH-USDT"
+    应被后端强制为 "BTC-USDT"：
+    - instance.symbol == "BTC-USDT"
+    - instance.params["symbol"] == "BTC-USDT"
+    - params["qs_model_config"]["meta"]["base_symbol"] 保持 "BTC-USDT"
+    """
+    client, SessionLocal, account_id = test_env
+
+    # 创建含 base_symbol="BTC-USDT" 的模板
+    create_resp = client.post(
+        "/api/strategies/templates",
+        json={
+            "name": "币对锁定-模板",
+            "strategy_type": "composable",
+            "default_params": {"symbol": "BTC-USDT", "order_qty": 0.01},
+            "qs_model_config": VALID_QS_MODEL_CONFIG,  # base_symbol="BTC-USDT"
+        },
+    )
+    assert create_resp.status_code == 200, create_resp.text
+    template_id = create_resp.json()["id"]
+
+    # 前端传 symbol="ETH-USDT"（与模板 base_symbol 不一致）
+    inst_resp = client.post(
+        "/api/strategies/instances",
+        json={
+            "template_id": template_id,
+            "account_id": account_id,
+            "name": "币对锁定实例",
+            "symbol": "ETH-USDT",
+            "market_type": "spot",
+            "params": {"order_qty": 0.02},
+        },
+    )
+    assert inst_resp.status_code == 200, inst_resp.text
+
+    # 验证数据库中实例 symbol 被强制为 base_symbol
+    db = SessionLocal()
+    try:
+        from models.strategy import StrategyInstance
+
+        instance = db.query(StrategyInstance).order_by(StrategyInstance.id.desc()).first()
+        assert instance is not None
+        assert instance.symbol == "BTC-USDT", (
+            f"base_symbol 锁定时 instance.symbol 应为 BTC-USDT，实际为 {instance.symbol}"
+        )
+        # merged_params 中 symbol 也被强制
+        assert instance.params["symbol"] == "BTC-USDT"
+        # qs_model_config 中的 base_symbol 保持不变
+        assert instance.params["qs_model_config"]["meta"]["base_symbol"] == "BTC-USDT"
+        # 其他用户参数正常透传
+        assert instance.params["order_qty"] == 0.02
+    finally:
+        db.close()
+
+
+# ============================================================
+# 10. create_instance 币对透传：模板 meta.base_symbol 为空时 symbol 透传
+# ============================================================
+
+
+def test_create_instance_symbol_passthrough_when_base_symbol_empty(test_env):
+    """模板 qs_model_config.meta.base_symbol="" 时，前端传 symbol="ETH-USDT" 应原样透传。"""
+    client, SessionLocal, account_id = test_env
+
+    # 构造 base_symbol 为空字符串的 QS-Model 配置
+    config_empty_symbol = {
+        "qs_model_version": "2.0",
+        "meta": {
+            "name": "无锁定币对",
+            "base_symbol": "",  # 空字符串视为未设置
+        },
+        "params": {},
+        "logic": {
+            "version": "1.0",
+            "base_strategy": {
+                "kind": "grid",
+                "params": {"upper_price": 50000, "lower_price": 40000, "grid_count": 10, "order_qty": 0.01},
+            },
+            "rules": [],
+        },
+        "risk_filter": None,
+    }
+
+    create_resp = client.post(
+        "/api/strategies/templates",
+        json={
+            "name": "无币对锁定-模板",
+            "strategy_type": "composable",
+            "default_params": {"symbol": "BTC-USDT"},
+            "qs_model_config": config_empty_symbol,
+        },
+    )
+    assert create_resp.status_code == 200, create_resp.text
+    template_id = create_resp.json()["id"]
+
+    # 前端传 symbol="ETH-USDT"，应原样透传
+    inst_resp = client.post(
+        "/api/strategies/instances",
+        json={
+            "template_id": template_id,
+            "account_id": account_id,
+            "name": "无锁定实例",
+            "symbol": "ETH-USDT",
+            "market_type": "spot",
+            "params": {},
+        },
+    )
+    assert inst_resp.status_code == 200, inst_resp.text
+
+    db = SessionLocal()
+    try:
+        from models.strategy import StrategyInstance
+
+        instance = db.query(StrategyInstance).order_by(StrategyInstance.id.desc()).first()
+        assert instance is not None
+        assert instance.symbol == "ETH-USDT", (
+            f"base_symbol 为空时 instance.symbol 应透传 ETH-USDT，实际为 {instance.symbol}"
+        )
+        assert instance.params["symbol"] == "ETH-USDT"
+    finally:
+        db.close()
+
+
+# ============================================================
+# 11. create_instance 币对透传：无 qs_model_config 的内置模板 symbol 透传
+# ============================================================
+
+
+def test_create_instance_symbol_passthrough_without_qs_model_config(test_env):
+    """无 qs_model_config 的内置硬编码策略模板（grid/trend 等），symbol 原样透传。"""
+    client, SessionLocal, account_id = test_env
+
+    # 创建不含 qs_model_config 也不含 dsl_config 的传统模板
+    create_resp = client.post(
+        "/api/strategies/templates",
+        json={
+            "name": "内置硬编码策略",
+            "strategy_type": "grid",
+            "default_params": {"upper_price": 50000, "lower_price": 40000},
+        },
+    )
+    assert create_resp.status_code == 200, create_resp.text
+    template_id = create_resp.json()["id"]
+
+    inst_resp = client.post(
+        "/api/strategies/instances",
+        json={
+            "template_id": template_id,
+            "account_id": account_id,
+            "name": "硬编码策略实例",
+            "symbol": "ETH-USDT",
+            "market_type": "swap",
+            "params": {},
+        },
+    )
+    assert inst_resp.status_code == 200, inst_resp.text
+
+    db = SessionLocal()
+    try:
+        from models.strategy import StrategyInstance
+
+        instance = db.query(StrategyInstance).order_by(StrategyInstance.id.desc()).first()
+        assert instance is not None
+        assert instance.symbol == "ETH-USDT", (
+            f"无 qs_model_config 时 instance.symbol 应透传 ETH-USDT，实际为 {instance.symbol}"
+        )
+    finally:
+        db.close()
 
 
 if __name__ == "__main__":

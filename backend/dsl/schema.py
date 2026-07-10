@@ -43,13 +43,13 @@ class Rule(BaseModel):
 
 
 class BaseStrategyRef(BaseModel):
-    kind: str
+    kind: str | None = None
     params: dict[str, Any] = Field(default_factory=dict)
 
 
 class StrategyDSL(BaseModel):
     version: Literal["1.0"] = "1.0"
-    base_strategy: BaseStrategyRef
+    base_strategy: BaseStrategyRef | None = None
     rules: list[Rule] = Field(default_factory=list)
 
 
@@ -85,6 +85,8 @@ class RiskFilter(BaseModel):
     daily_max_loss: float | None = None  # 每日最大亏损
     min_trade_size: float | None = None  # 最小交易量
     blacklist_hours: list[str] | None = None  # 黑名单时段，如 ["00:00", "01:00"]
+    stop_loss: float | None = None  # 止损价/比例
+    take_profit: float | None = None  # 止盈价/比例
 
 
 class QSModelConfig(BaseModel):

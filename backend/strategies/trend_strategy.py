@@ -14,6 +14,54 @@ class TrendStrategy(BaseStrategy):
             return False
         return True
 
+    async def _on_order_filled(self, order_info):
+        """Handle order fill event for position tracking."""
+        symbol = order_info.symbol
+        side = order_info.side
+        px = float(order_info.px) if order_info.px else 0
+        sz = float(order_info.sz) if order_info.sz else 0
+
+        if side == "buy":
+            if self._position < 0:
+                # Closing short position → realized PnL
+                close_qty = min(sz, abs(self._position))
+                realized = (self._avg_entry_price - px) * close_qty
+                self.add_realized_pnl(realized)
+                remaining = sz - close_qty
+                if remaining > 0:
+                    self._position = remaining
+                    self._avg_entry_price = px
+                else:
+                    self._position += sz
+                    if self._position >= 0:
+                        self._avg_entry_price = px
+            else:
+                # Opening/adding to long position
+                new_total = self._position + sz
+                self._avg_entry_price = (self._avg_entry_price * self._position + px * sz) / new_total if new_total > 0 else px
+                self._position = new_total
+        elif side == "sell":
+            if self._position > 0:
+                # Closing long position → realized PnL
+                close_qty = min(sz, self._position)
+                realized = (px - self._avg_entry_price) * close_qty
+                self.add_realized_pnl(realized)
+                remaining = sz - close_qty
+                if remaining > 0:
+                    self._position = -remaining
+                    self._avg_entry_price = px
+                else:
+                    self._position -= sz
+                    if self._position <= 0:
+                        self._avg_entry_price = px
+            else:
+                # Opening/adding to short position
+                new_total = abs(self._position) + sz
+                self._avg_entry_price = (self._avg_entry_price * abs(self._position) + px * sz) / new_total if new_total > 0 else px
+                self._position = -new_total
+
+        self.record_order(symbol, side, "market", px, sz, order_id=order_info.ordId, status="filled")
+
     async def execute(self):
         if not await self.validate_params():
             self.update_status("error")
@@ -26,6 +74,34 @@ class TrendStrategy(BaseStrategy):
 
         last_signal = None
         self.update_status("running")
+
+        # Get initial equity once at start
+        try:
+            balances = await self.client.get_balance()
+            if balances:
+                self._initial_equity = float(balances.get("totalEq", "0"))
+        except Exception:
+            self._initial_equity = 0.0
+
+        # Register order fill callback for position tracking
+        self.order_manager.on("filled", self._on_order_filled)
+        self._position = 0.0  # net position
+        self._avg_entry_price = 0.0  # average entry price
+
+        # Restore realized PnL from latest DB record
+        try:
+            from models.pnl import PnlRecord
+            db = self.db_session_factory()
+            try:
+                latest_pnl = db.query(PnlRecord).filter(
+                    PnlRecord.strategy_instance_id == self.instance_id
+                ).order_by(PnlRecord.recorded_at.desc()).first()
+                if latest_pnl:
+                    self.restore_realized_pnl(latest_pnl.realized_pnl or 0)
+            finally:
+                db.close()
+        except Exception:
+            pass
 
         while self._running:
             if self._paused:
@@ -62,10 +138,25 @@ class TrendStrategy(BaseStrategy):
                     self.record_order(symbol, signal, "market", current_price, order_qty)
                     last_signal = signal
 
-                balances = await self.client.get_balance()
-                if balances:
-                    total_equity = float(balances.get("totalEq", "0"))
-                    self.record_pnl(total_equity, 0, 0)
+                # Calculate unrealized PnL from position
+                current_price = closes[-1]
+                if self._position != 0:
+                    unrealized_pnl = (current_price - self._avg_entry_price) * self._position
+                    # Deduct estimated close fee
+                    estimated_close_fee = abs(self._position) * current_price * self._fee_rate
+                    unrealized_pnl -= estimated_close_fee
+                else:
+                    unrealized_pnl = 0.0
+
+                realized_pnl = self.get_realized_pnl()
+                total_pnl = unrealized_pnl + realized_pnl
+
+                # Get equity for recording (fallback to initial_equity + pnl)
+                total_equity = self._initial_equity + total_pnl
+
+                if self._should_record_pnl(total_pnl):
+                    self.record_pnl(total_equity, unrealized_pnl, realized_pnl)
+                    self._mark_pnl_recorded(total_pnl)
 
             except Exception:
                 pass

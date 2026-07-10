@@ -106,7 +106,12 @@ class AdvancedGridHedgeStrategy(BaseStrategy):
                 balances = await self.client.get_balance()
                 if balances:
                     total_equity = float(balances.get("totalEq", "0"))
-                    self.record_pnl(total_equity, 0, 0)
+                    if self._initial_equity == 0.0:
+                        self._initial_equity = total_equity
+                    strategy_pnl = total_equity - self._initial_equity
+                    if self._should_record_pnl(strategy_pnl):
+                        self.record_pnl(total_equity, 0, strategy_pnl)
+                        self._mark_pnl_recorded(strategy_pnl)
 
             except Exception:
                 pass

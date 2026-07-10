@@ -43,11 +43,13 @@ export default function DashboardPage() {
     getPnlSummary().then((res) => { setSummary(res.data); setSummaryLoading(false); setKpiLoading(false) }).catch(() => { setSummaryLoading(false); setKpiLoading(false) })
     listPnlRecords(sid ? { strategy_instance_id: sid } : { limit: 200 }).then((res) => setPnlRecords(res.data)).catch(() => {})
     listInstances().then((res) => setInstances(res.data)).catch(() => {})
-    listOrders(sid ? { strategy_instance_id: sid, limit: 50 } : { limit: 50 }).then((res) => {
-      setOrders(res.data.filter((o: Order) => o.status === 'filled').slice(0, 10))
-      setLiveOrders(res.data.filter((o: Order) => o.status === 'live'))
+    listOrders(sid ? { strategy_instance_id: sid, status: 'filled', limit: 10, sort_by: 'updated_at' } : { status: 'filled', limit: 10, sort_by: 'updated_at' }).then((res) => {
+      setOrders(res.data)
       setOrdersLoading(false)
     }).catch(() => setOrdersLoading(false))
+    listOrders(sid ? { strategy_instance_id: sid, status: 'live', limit: 50 } : { status: 'live', limit: 50 }).then((res) => {
+      setLiveOrders(res.data)
+    }).catch(() => {})
     listApiCallLogs(sid ? { strategy_instance_id: sid, limit: 50 } : { limit: 50 }).then((res) => { setApiLogs(res.data); setLogsLoading(false) }).catch(() => setLogsLoading(false))
   }, [selectedStrategyId])
 
@@ -282,7 +284,7 @@ export default function DashboardPage() {
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-[11px] text-[#7B86A2] uppercase tracking-[0.12em] font-semibold">盈亏曲线</h3>
             <div className="flex gap-1">
-              {(['1h', '1d', '1w', '1mo', 'all'] as TimeRange[]).map((r) => (
+              {(['24h', '7d', '30d', 'all'] as TimeRange[]).map((r) => (
                 <button
                   key={r}
                   onClick={() => setTimeRange(r)}
@@ -292,7 +294,7 @@ export default function DashboardPage() {
                       : 'text-[#7B86A2] border-[#2A3350] hover:text-[#EDF0F7] hover:border-[#505C78]'
                   }`}
                 >
-                  {r === '1h' ? '1小时' : r === '1d' ? '1天' : r === '1w' ? '1周' : r === '1mo' ? '1月' : '全部'}
+                  {r === '24h' ? '过去24小时' : r === '7d' ? '过去7天' : r === '30d' ? '过去30天' : '全部'}
                 </button>
               ))}
             </div>

@@ -1,6 +1,6 @@
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 LOG_DIR = Path(__file__).resolve().parent.parent / "logs"
@@ -15,7 +15,7 @@ def _ensure_dir(dir_path: Path):
 
 
 def _get_log_path(category: str) -> Path:
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     dir_path = LOG_DIR / category
     _ensure_dir(dir_path)
     return dir_path / f"api_{today}.log"
@@ -115,7 +115,7 @@ def list_log_files(category: str = "all") -> list[dict]:
                 "name": f.name,
                 "size": stat.st_size,
                 "date": f.stem.replace("api_", ""),
-                "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                "modified": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
             })
     return files
 

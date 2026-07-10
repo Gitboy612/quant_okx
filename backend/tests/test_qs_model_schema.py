@@ -162,6 +162,131 @@ def test_risk_filter_all_none():
     assert rf.daily_max_loss is None
     assert rf.min_trade_size is None
     assert rf.blacklist_hours is None
+    assert rf.stop_loss is None
+    assert rf.take_profit is None
+
+
+def test_risk_filter_stop_loss_take_profit():
+    """5b. RiskFilter stop_loss / take_profit 字段可设置并序列化往返"""
+    rf = RiskFilter(stop_loss=0.95, take_profit=1.20)
+    assert rf.stop_loss == 0.95
+    assert rf.take_profit == 1.20
+
+    # dict 往返
+    dumped = rf.model_dump()
+    assert dumped["stop_loss"] == 0.95
+    assert dumped["take_profit"] == 1.20
+    rf2 = RiskFilter.model_validate(dumped)
+    assert rf2 == rf
+
+    # JSON 往返
+    rf3 = RiskFilter.model_validate_json(rf.model_dump_json())
+    assert rf3 == rf
+
+
+def test_base_strategy_ref_kind_optional():
+    """5c. BaseStrategyRef.kind 可空（默认 None），params 默认空 dict"""
+    bs = BaseStrategyRef()
+    assert bs.kind is None
+    assert bs.params == {}
+
+    # 仅传 kind 也能正常构造
+    bs2 = BaseStrategyRef(kind="grid")
+    assert bs2.kind == "grid"
+    assert bs2.params == {}
+
+
+def test_strategy_dsl_base_strategy_optional():
+    """5d. StrategyDSL.base_strategy 可空（默认 None）"""
+    dsl = StrategyDSL()
+    assert dsl.version == "1.0"
+    assert dsl.base_strategy is None
+    assert dsl.rules == []
+
+    # dict 往返：base_strategy=None 应能正常加载
+    dumped = dsl.model_dump()
+    assert dumped["base_strategy"] is None
+    dsl2 = StrategyDSL.model_validate(dumped)
+    assert dsl2 == dsl
+    assert dsl2.base_strategy is None
+
+    # JSON 往返
+    dsl3 = StrategyDSL.model_validate_json(dsl.model_dump_json())
+    assert dsl3 == dsl
+    assert dsl3.base_strategy is None
+
+
+def test_qs_model_with_none_base_strategy():
+    """5e. QSModelConfig.logic.base_strategy=None 时正常构造与序列化"""
+    qm = QSModelConfig(
+        meta=StrategyMeta(name="no_base"),
+        logic=StrategyDSL(base_strategy=None, rules=[]),
+    )
+    assert qm.logic.base_strategy is None
+
+    # dict 往返
+    dumped = qm.model_dump()
+    assert dumped["logic"]["base_strategy"] is None
+    qm2 = QSModelConfig.model_validate(dumped)
+    assert qm2 == qm
+    assert qm2.logic.base_strategy is None
+
+    # JSON 往返
+    qm3 = QSModelConfig.model_validate_json(qm.model_dump_json())
+    assert qm3 == qm
+    assert qm3.logic.base_strategy is None
+
+
+def test_resolve_variables_with_none_base_strategy():
+    """5f. resolve_variables 在 base_strategy=None 时不报错"""
+    qm = QSModelConfig(
+        meta=StrategyMeta(name="x", base_symbol="BTC-USDT"),
+        params={"p1": ParamDefinition(label="p", value=7, type="int")},
+        logic=StrategyDSL(
+            base_strategy=None,
+            rules=[
+                Rule(
+                    name="r",
+                    when=Trigger(
+                        mode="condition",
+                        condition=ConditionRef(
+                            kind="c",
+                            args={"v": "$params.p1", "sym": "$meta.base_symbol"},
+                        ),
+                    ),
+                    then=[],
+                ),
+            ],
+        ),
+    )
+    resolved = resolve_variables(qm)
+    assert isinstance(resolved, StrategyDSL)
+    assert resolved.base_strategy is None
+    # rules 中的变量引用仍被正确解析
+    cond_args = resolved.rules[0].when.condition.args
+    assert cond_args["v"] == 7
+    assert cond_args["sym"] == "BTC-USDT"
+
+
+def test_qs_model_risk_filter_with_stop_loss_take_profit():
+    """5g. QSModelConfig 携带 stop_loss/take_profit 的 risk_filter 序列化往返"""
+    qm = QSModelConfig(
+        meta=StrategyMeta(name="risk"),
+        logic=StrategyDSL(base_strategy=BaseStrategyRef(kind="grid")),
+        risk_filter=RiskFilter(
+            stop_loss=0.9,
+            take_profit=1.5,
+            max_position_ratio=0.5,
+        ),
+    )
+    dumped = qm.model_dump()
+    assert dumped["risk_filter"]["stop_loss"] == 0.9
+    assert dumped["risk_filter"]["take_profit"] == 1.5
+
+    qm2 = QSModelConfig.model_validate(dumped)
+    assert qm2 == qm
+    assert qm2.risk_filter.stop_loss == 0.9
+    assert qm2.risk_filter.take_profit == 1.5
 
 
 def test_meta_required_name():

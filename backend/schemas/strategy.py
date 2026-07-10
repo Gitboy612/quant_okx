@@ -26,6 +26,19 @@ class StrategyTemplateCreate(BaseModel):
     force: bool = False  # 检测到重复 logic_hash 时是否强制创建
 
 
+class StrategyTemplateUpdate(BaseModel):
+    """模板部分更新 schema（PUT /templates/{id}）。
+
+    所有字段均为可选：仅更新请求中提供的字段，未提供字段保持原值。
+    """
+    name: str | None = None
+    qs_model_config: dict | None = None
+    dsl_config: dict | None = None
+    default_params: dict | None = None
+    param_schema: dict | None = None
+    description: str | None = None
+
+
 class StrategyTemplateResponse(BaseModel):
     """模板响应（含 QS-Model 字段与去重提示）。"""
     id: int

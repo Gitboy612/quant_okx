@@ -30,36 +30,43 @@ function OpeningAnimation({ onComplete }: { onComplete: () => void }) {
       {/* Particle dust */}
       <div className="cinema-particles" />
 
-      {/* Logo reveal */}
-      <div className="flex flex-col items-center relative z-10">
+      {/* Logo reveal: original blur/scale + 3D flip + light sweep, icon only (no outer frame) */}
+      <div className="flex flex-col items-center relative z-10" style={{ perspective: '800px' }}>
         <motion.div
-          initial={{ scale: 0.4, opacity: 0, filter: 'blur(20px) brightness(2)' }}
-          animate={{ scale: 1, opacity: 1, filter: 'blur(0px) brightness(1)' }}
+          initial={{ rotateY: -180, scale: 0.4, opacity: 0, filter: 'blur(20px) brightness(2)' }}
+          animate={{ rotateY: 0, scale: 1, opacity: 1, filter: 'blur(0px) brightness(1)' }}
           transition={{ delay: 1.2, duration: 1.8, ease: [0.16, 1, 0.3, 1] }}
           className="relative"
+          style={{ transformStyle: 'preserve-3d' }}
         >
           {/* Glow behind logo */}
-          <div className="absolute inset-0 rounded-3xl blur-3xl opacity-0"
+          <div className="absolute inset-0 blur-3xl opacity-0"
             style={{
               background: 'radial-gradient(circle, rgba(0,212,170,0.35) 0%, transparent 70%)',
               animation: 'cinema-glow 2.5s ease-in-out infinite 2s',
             }}
           />
           <div
-            className="w-24 h-24 rounded-2xl flex items-center justify-center relative"
+            className="relative overflow-hidden"
             style={{
-              background: 'linear-gradient(135deg, rgba(0,212,170,0.15) 0%, rgba(0,212,170,0.03) 100%)',
-              border: '1px solid rgba(0,212,170,0.2)',
-              boxShadow: '0 0 60px rgba(0,212,170,0.12), 0 0 120px rgba(0,212,170,0.04)',
+              width: 72,
+              height: 72,
+              borderRadius: 18,
+              transform: 'translateZ(20px)',
+              boxShadow: '0 0 60px rgba(0,212,170,0.12), 0 0 120px rgba(0,212,170,0.04), inset 0 1px 0 rgba(255,255,255,0.05)',
             }}
           >
             <img
               src={qstudioLogo3dSrc}
               alt="Q-Studio"
-              className="w-16 h-16"
+              className="w-full h-full rounded-[18px]"
               style={{ filter: 'drop-shadow(0 0 8px rgba(0,212,170,0.3))' }}
             />
+            {/* Light sweep overlay */}
+            <div className="logo-light-sweep absolute inset-0 pointer-events-none rounded-[18px]" />
           </div>
+          {/* Bottom reflection shadow */}
+          <div className="absolute" style={{ width: 60, height: 10, bottom: -8, left: '50%', transform: 'translateX(-50%) rotateX(80deg)', background: 'radial-gradient(ellipse, rgba(0,212,170,0.15) 0%, transparent 70%)', filter: 'blur(4px)' }} />
         </motion.div>
 
         <motion.div

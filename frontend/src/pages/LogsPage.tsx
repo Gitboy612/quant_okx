@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { listLogs } from '../api/logs'
 import type { OperationLog, PaginatedResponse } from '../types'
@@ -17,6 +17,15 @@ const actionLabels: Record<string, string> = {
   delete_strategy: '删除策略',
 }
 
+// 防御性解析：后端 Task 16 已输出带 Z 的 UTC 字符串，
+// 但旧数据可能不带时区标记，此时按 UTC 解析避免被当作本地时间。
+function parseUTC(dateStr: string): Date {
+  if (/Z$|[+-]\d{2}:\d{2}$/.test(dateStr)) {
+    return new Date(dateStr)
+  }
+  return new Date(dateStr + 'Z')
+}
+
 export default function LogsPage() {
   const [data, setData] = useState<PaginatedResponse<OperationLog>>({ total: 0, items: [] })
 
@@ -30,7 +39,10 @@ export default function LogsPage() {
       animate={{ opacity: 1 }}
       className="space-y-6"
     >
-      <h2 className="text-sm font-medium text-[#EDF0F7]">操作日志</h2>
+      <div>
+        <h2 className="text-sm font-medium text-[#EDF0F7]">操作日志</h2>
+        <p className="text-xs text-[#7B86A2] mt-1">时间显示为本地时间（UTC+8），后端以 UTC 存储</p>
+      </div>
 
       <div className="glass-panel p-5">
         {data.items.length === 0 ? (
@@ -48,7 +60,7 @@ export default function LogsPage() {
                 className="flex items-start gap-4 py-3 border-b border-[rgba(0,212,170,0.08)]/50 last:border-0"
               >
                 <span className="text-xs text-[#7B86A2] font-mono whitespace-nowrap mt-0.5">
-                  {new Date(log.created_at).toLocaleString('zh-CN', {
+                  {parseUTC(log.created_at).toLocaleString('zh-CN', {
                     month: 'short',
                     day: 'numeric',
                     hour: '2-digit',

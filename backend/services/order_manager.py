@@ -1,6 +1,6 @@
 import asyncio
-import threading
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Callable
 
 
@@ -50,6 +50,14 @@ class OrderManager:
             "any": [],
         }
         self._running: bool = True
+        # 持有持久化 task 的强引用，避免被事件循环弱引用 GC 回收
+        self._pending_persist_tasks: set = set()
+        # 净持仓状态（用于未实现盈亏计算）
+        self._net_position: float = 0.0       # 净持仓量（买入累计 - 卖出累计）
+        self._avg_buy_price: float = 0.0       # 加权平均买入价
+        self._total_buy_qty: float = 0.0       # 累计买入量
+        self._total_buy_value: float = 0.0     # 累计买入价值（qty × px）
+        self._total_sell_qty: float = 0.0      # 累计卖出量
 
     def add_order(self, ordId: str, clOrdId: str, symbol: str, side: str, px: str, sz: str, state: str = "live"):
         order = OrderInfo(
@@ -88,6 +96,7 @@ class OrderManager:
         new_state = order.state
         if new_state != old_state:
             if new_state == "filled":
+                self._update_position_on_filled(order)
                 self._trigger_callbacks("filled", order)
             elif new_state == "canceled":
                 self._trigger_callbacks("canceled", order)
@@ -97,8 +106,58 @@ class OrderManager:
         self._async_persist(order)
         return order
 
+    def _update_position_on_filled(self, order: OrderInfo):
+        """订单成交时更新净持仓状态。
+
+        买单：累加买入量与价值，更新加权均价
+        卖单：扣减净持仓（不改变加权均价，实现 FIFO 平仓）
+        """
+        fill_sz = float(order.fillSz) if order.fillSz else (float(order.sz) if order.sz else 0)
+        fill_px = float(order.fillPx) if order.fillPx else (float(order.px) if order.px else 0)
+        if fill_sz <= 0:
+            return
+
+        if order.side == "buy":
+            self._total_buy_qty += fill_sz
+            self._total_buy_value += fill_sz * fill_px
+            if self._total_buy_qty > 0:
+                self._avg_buy_price = self._total_buy_value / self._total_buy_qty
+            self._net_position += fill_sz
+        elif order.side == "sell":
+            self._total_sell_qty += fill_sz
+            self._net_position -= fill_sz
+
+    def get_position_summary(self) -> tuple[float, float]:
+        """返回当前净持仓与加权平均买入价，供策略计算未实现盈亏。"""
+        return (self._net_position, self._avg_buy_price)
+
+    def restore_position(self, net_position: float, avg_buy_price: float):
+        """策略重启时从 DB 恢复持仓状态。"""
+        self._net_position = net_position
+        self._avg_buy_price = avg_buy_price
+
     def get_order(self, ordId: str) -> OrderInfo | None:
         return self._orders.get(ordId)
+
+    def get_order_fee(self, ordId: str) -> float:
+        """返回指定订单的手续费，供已实现盈亏扣费使用。"""
+        order = self._orders.get(ordId)
+        if order and order.fee:
+            try:
+                return float(order.fee)
+            except (ValueError, TypeError):
+                return 0.0
+        return 0.0
+
+    def get_order_fill_px(self, ordId: str) -> float:
+        """返回指定订单的实际成交价，供已实现盈亏计算使用。"""
+        order = self._orders.get(ordId)
+        if order and order.fillPx:
+            try:
+                return float(order.fillPx)
+            except (ValueError, TypeError):
+                return 0.0
+        return 0.0
 
     def get_active_orders(self) -> list[OrderInfo]:
         return [o for o in self._orders.values() if o.state in ("live", "partially_filled")]
@@ -157,13 +216,24 @@ class OrderManager:
             try:
                 result = cb(order)
                 if asyncio.iscoroutine(result):
-                    asyncio.ensure_future(result)
+                    try:
+                        asyncio.create_task(result)
+                    except RuntimeError:
+                        # 无运行中的 event loop，跳过协程调度
+                        pass
             except Exception:
                 pass
 
     def _async_persist(self, order: OrderInfo):
-        t = threading.Thread(target=self._persist_to_db, args=(order,), daemon=True)
-        t.start()
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            # 无运行中的 event loop（如同步调用上下文），直接同步持久化
+            self._persist_to_db(order)
+            return
+        task = asyncio.create_task(asyncio.to_thread(self._persist_to_db, order))
+        self._pending_persist_tasks.add(task)
+        task.add_done_callback(self._pending_persist_tasks.discard)
 
     def _persist_to_db(self, order: OrderInfo):
         db = self._db_session_factory()
@@ -179,6 +249,7 @@ class OrderManager:
                 existing.filled_quantity = float(order.fillSz) if order.fillSz else 0
                 existing.status = self._map_state_to_status(order.state)
                 existing.update_time = order.uTime
+                existing.updated_at = datetime.now(timezone.utc)
             else:
                 new_order = Order(
                     strategy_instance_id=self._strategy_instance_id,

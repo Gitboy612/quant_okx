@@ -369,6 +369,20 @@ input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; marg
   50% { opacity: 0.7; transform: scale(1.1); }
 }
 
+/* ===== Logo Light Sweep ===== */
+.logo-light-sweep {
+  background: linear-gradient(120deg, transparent 35%, rgba(255,255,255,0.28) 50%, transparent 65%);
+  background-size: 250% 100%;
+  background-position: 200% 0;
+  animation: logo-light-sweep 2.8s ease-in-out 3s infinite;
+  mix-blend-mode: overlay;
+}
+
+@keyframes logo-light-sweep {
+  0% { background-position: 200% 0; }
+  100% { background-position: -150% 0; }
+}
+
 /* ===== Performance Mode ===== */
 .performance-mode .scan-line::before { display: none; }
 .performance-mode .cinema-beams { display: none; }
@@ -376,3 +390,4 @@ input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; marg
 .performance-mode .animate-float { animation: none; }
 .performance-mode .animate-shimmer { animation: none; }
 .performance-mode .animate-pulse-glow { animation: none; }
+.performance-mode .logo-light-sweep { display: none; }

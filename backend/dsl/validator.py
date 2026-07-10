@@ -136,12 +136,21 @@ class DSLValidator:
 
     def _validate_references(self, dsl: StrategyDSL) -> None:
         # 基础策略
-        if not base_strategy_registry.exists(dsl.base_strategy.kind):
-            self.result.add_error(
-                "reference", "UNKNOWN_KIND",
-                f"未知基础策略 kind: {dsl.base_strategy.kind}",
-                "base_strategy.kind",
-            )
+        if dsl.base_strategy is None or dsl.base_strategy.kind is None:
+            # 无基础策略的纯规则策略：必须有至少一条规则
+            if len(dsl.rules) == 0:
+                self.result.add_error(
+                    "reference", "NO_BASE_NO_RULES",
+                    "无基础策略时至少需要一条规则",
+                    "rules",
+                )
+        else:
+            if not base_strategy_registry.exists(dsl.base_strategy.kind):
+                self.result.add_error(
+                    "reference", "UNKNOWN_KIND",
+                    f"未知基础策略 kind: {dsl.base_strategy.kind}",
+                    "base_strategy.kind",
+                )
 
         for i, rule in enumerate(dsl.rules):
             base = f"rules[{i}]"

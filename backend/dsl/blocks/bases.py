@@ -127,8 +127,8 @@ class GridBlock:
     param_schema = {
         "upper_price": {"type": "number", "label": "价格上限", "required": True, "description": "价格上限"},
         "lower_price": {"type": "number", "label": "价格下限", "required": True, "description": "价格下限"},
-        "grid_count": {"type": "number", "label": "网格数量", "required": True, "description": "网格数量"},
-        "order_qty": {"type": "number", "label": "单格数量", "required": False, "default": 0.001, "description": "单格交易量"},
+        "grid_count": {"type": "integer", "label": "网格数量", "required": True, "description": "网格数量"},
+        "order_qty": {"type": "number", "label": "单格数量", "required": False, "default": 0.001, "step": 0.001, "description": "单格交易量"},
         "grid_mode": {"type": "select", "label": "网格模式", "required": False, "options": ["arithmetic", "geometric"], "option_labels": ["等差", "等比"], "default": "arithmetic", "description": "等差/等比"},
         "direction": {"type": "select", "label": "交易方向", "required": False, "options": ["long", "short", "neutral"], "option_labels": ["做多", "做空", "双向"], "default": "neutral", "description": "交易方向"},
         "symbol": {"type": "string", "label": "交易对", "required": True, "description": "交易对"},
@@ -157,6 +157,7 @@ class GridBlock:
         self.active_buy: dict[int, str] = {}   # grid_idx -> ordId
         self.active_sell: dict[int, str] = {}
         self._started = False
+        self._last_rest_check: float = 0.0
 
     def _round_price(self, level: float) -> float:
         return round(round(level / self.tick_size) * self.tick_size, self.tick_decimals)
@@ -172,8 +173,16 @@ class GridBlock:
         below_count = sum(1 for lvl in self.levels if lvl < price)
         return below_count * self.order_qty
 
-    async def on_start(self, ctx: ExecutionContext) -> None:
-        """放置初始网格订单：当前价以下挂买单，以上挂卖单。"""
+    async def _place_grid_orders(self, ctx: ExecutionContext) -> None:
+        """放置网格订单。
+
+        - direction="long"：所有档位挂买单（高于现价的立即成交建立多头持仓）
+        - direction="short"：所有档位挂卖单（低于现价的立即成交建立空头持仓）
+        - direction="neutral"：当前价以下挂买单，以上挂卖单
+
+        跳过已活跃的层级（``i in active_buy`` / ``i in active_sell``），
+        避免重复挂单。on_start 与 on_resume 共用此方法。
+        """
         client = ctx.client
         symbol = self.symbol
         current_price = ctx.current_price
@@ -182,16 +191,29 @@ class GridBlock:
             current_price = float(ticker[0]["last"]) if ticker else (self.lower_price + self.upper_price) / 2
             ctx.current_price = current_price
 
-        # direction 过滤：long 只挂买单，short 只挂卖单，neutral 双向
-        place_buy = self.direction in ("long", "neutral")
-        place_sell = self.direction in ("short", "neutral")
-
         buy_orders, sell_orders = [], []
         for i, level in enumerate(self.levels):
-            if level < current_price and place_buy:
-                buy_orders.append({"idx": i, "px": self._price_str(level)})
-            elif level > current_price and place_sell:
-                sell_orders.append({"idx": i, "px": self._price_str(level)})
+            price_str = self._price_str(level)
+            if self.direction == "long":
+                # 做多网格：所有档位挂买单（高于现价的立即成交建立多头持仓）
+                if i in self.active_buy:
+                    continue
+                buy_orders.append({"idx": i, "px": price_str})
+            elif self.direction == "short":
+                # 做空网格：所有档位挂卖单（低于现价的立即成交建立空头持仓）
+                if i in self.active_sell:
+                    continue
+                sell_orders.append({"idx": i, "px": price_str})
+            else:
+                # 双向网格：现价下方挂买单、上方挂卖单
+                if level < current_price:
+                    if i in self.active_buy:
+                        continue
+                    buy_orders.append({"idx": i, "px": price_str})
+                elif level > current_price:
+                    if i in self.active_sell:
+                        continue
+                    sell_orders.append({"idx": i, "px": price_str})
 
         BATCH = 20
         for batch_start in range(0, len(buy_orders), BATCH):
@@ -221,6 +243,44 @@ class GridBlock:
                         self.active_sell[o["idx"]] = oid
                         ctx.order_manager.add_order(oid, "", symbol, "sell", o["px"], str(self.order_qty), "live")
             await asyncio.sleep(0.15)
+
+    async def _restore_active_orders(self, ctx: ExecutionContext) -> None:
+        """从 DB 恢复已有活跃订单到 active_buy/active_sell 字典。
+
+        按价格匹配网格档位，填充已恢复的档位，避免 _place_grid_orders 重复下单。
+        """
+        strategy = ctx.strategy
+        try:
+            from models.order import Order
+            db = strategy.db_session_factory()
+            try:
+                live_orders = db.query(Order).filter(
+                    Order.strategy_instance_id == strategy.instance_id,
+                    Order.status == "live"
+                ).all()
+                for o in live_orders:
+                    if not o.order_id:
+                        continue
+                    px_val = float(o.price) if o.price else 0
+                    for i, level in enumerate(self.levels):
+                        price = self._round_price(level)
+                        if abs(price - px_val) < self.tick_size * 0.6:
+                            if o.side == "buy":
+                                self.active_buy[i] = o.order_id
+                            elif o.side == "sell":
+                                self.active_sell[i] = o.order_id
+                            break
+            finally:
+                db.close()
+        except Exception as e:
+            strategy._record_event("warn", f"恢复活跃订单失败: {e}")
+
+    async def on_start(self, ctx: ExecutionContext) -> None:
+        """放置初始网格订单：先从 DB 恢复已有活跃订单，再为缺失档位补挂新单。"""
+        # 从 DB 恢复已有活跃订单
+        await self._restore_active_orders(ctx)
+        # 为缺失档位补挂新单
+        await self._place_grid_orders(ctx)
         self._started = True
 
     async def on_order_filled(self, order_info, ctx: ExecutionContext) -> None:
@@ -242,27 +302,50 @@ class GridBlock:
         sz = float(order_info.sz) if order_info.sz else 0
         ordId = order_info.ordId
 
-        # 按成交价匹配 grid 索引
+        # 按成交价匹配 grid 索引（容差 tick_size * 0.5），无精确匹配时回退到最近层级
         grid_idx = None
+        best_idx = 0
+        best_diff = float("inf")
         for i, level in enumerate(self.levels):
             price = self._round_price(level)
-            if abs(price - px) < self.tick_size * 0.6:
+            diff = abs(price - px)
+            if diff < best_diff:
+                best_diff = diff
+                best_idx = i
+            if diff < self.tick_size * 0.5:
                 grid_idx = i
                 break
 
+        # 无精确匹配时回退到最近层级
         if grid_idx is None:
-            return
+            grid_idx = best_idx
 
         if side == "buy":
-            # 买单成交：从 active_buy 移除，挂卖单到 idx+1 的 level
+            # 买单成交：从 active_buy 移除
             if grid_idx in self.active_buy:
                 del self.active_buy[grid_idx]
-            order_manager.update_order(ordId, state="filled",
-                                       fillPx=str(px), fillSz=str(sz))
-            strategy._record_event("order_filled",
-                f"BUY 已成交: {symbol} ordId={ordId} px={px} qty={sz}",
-                {"order_id": ordId, "side": "buy", "price": px, "quantity": sz})
 
+            if self.direction == "short":
+                # 做空模式：买单成交 = 平空止盈，计算 PnL
+                # 对应的开空卖单价为 grid_idx + 1（卖单成交后挂的买单在更低档位被回补）
+                sell_px_for_pnl = self.levels[grid_idx + 1] if grid_idx + 1 < self.grid_count else self.levels[grid_idx] + self.step
+                cycle_pnl = (sell_px_for_pnl - px) * sz
+                strategy.add_realized_pnl(cycle_pnl)
+                order_manager.update_order(ordId, state="filled",
+                                           fillPx=str(px), fillSz=str(sz))
+                strategy._record_event("order_filled",
+                    f"BUY 已成交(平空止盈): {symbol} ordId={ordId} px={px} qty={sz} cycle_pnl={cycle_pnl}",
+                    {"order_id": ordId, "side": "buy", "price": px, "quantity": sz,
+                     "cycle_pnl": cycle_pnl})
+            else:
+                # 做多/双向模式：买单成交 = 开多，不计算 PnL
+                order_manager.update_order(ordId, state="filled",
+                                           fillPx=str(px), fillSz=str(sz))
+                strategy._record_event("order_filled",
+                    f"BUY 已成交: {symbol} ordId={ordId} px={px} qty={sz}",
+                    {"order_id": ordId, "side": "buy", "price": px, "quantity": sz})
+
+            # 挂卖单到 idx+1 的 level（做多=止盈，做空=重新开空）
             if grid_idx + 1 >= self.grid_count:
                 return
             sell_price = self._round_price(self.levels[grid_idx + 1])
@@ -291,21 +374,30 @@ class GridBlock:
                     f"code={sell_resp.get('code')} msg={sell_resp.get('msg', '')}")
 
         elif side == "sell":
-            # 卖单成交：从 active_sell 移除，计算 cycle_pnl，挂买单到 idx-1 的 level
+            # 卖单成交：从 active_sell 移除
             if grid_idx in self.active_sell:
                 del self.active_sell[grid_idx]
 
-            buy_px_for_pnl = self.levels[grid_idx - 1] if grid_idx > 0 else self.levels[grid_idx] - self.step
-            cycle_pnl = (px - buy_px_for_pnl) * sz
-            strategy.add_realized_pnl(cycle_pnl)
+            if self.direction == "short":
+                # 做空模式：卖单成交 = 开空，不计算 PnL
+                order_manager.update_order(ordId, state="filled",
+                                           fillPx=str(px), fillSz=str(sz))
+                strategy._record_event("order_filled",
+                    f"SELL 已成交(开空): {symbol} ordId={ordId} px={px} qty={sz}",
+                    {"order_id": ordId, "side": "sell", "price": px, "quantity": sz})
+            else:
+                # 做多/双向模式：卖单成交 = 平多止盈，计算 cycle_pnl
+                buy_px_for_pnl = self.levels[grid_idx - 1] if grid_idx > 0 else self.levels[grid_idx] - self.step
+                cycle_pnl = (px - buy_px_for_pnl) * sz
+                strategy.add_realized_pnl(cycle_pnl)
+                order_manager.update_order(ordId, state="filled",
+                                           fillPx=str(px), fillSz=str(sz))
+                strategy._record_event("order_filled",
+                    f"SELL 已成交: {symbol} ordId={ordId} px={px} qty={sz} cycle_pnl={cycle_pnl}",
+                    {"order_id": ordId, "side": "sell", "price": px, "quantity": sz,
+                     "cycle_pnl": cycle_pnl})
 
-            order_manager.update_order(ordId, state="filled",
-                                       fillPx=str(px), fillSz=str(sz))
-            strategy._record_event("order_filled",
-                f"SELL 已成交: {symbol} ordId={ordId} px={px} qty={sz} cycle_pnl={cycle_pnl}",
-                {"order_id": ordId, "side": "sell", "price": px, "quantity": sz,
-                 "cycle_pnl": cycle_pnl})
-
+            # 挂买单到 idx-1 的 level（做多=重新开多，做空=止盈平空）
             if grid_idx <= 0:
                 return
             buy_price = self._round_price(self.levels[grid_idx - 1])
@@ -340,14 +432,46 @@ class GridBlock:
         self.active_sell.clear()
 
     async def on_resume(self, ctx: ExecutionContext) -> None:
-        """重新挂网格（基于当前价）。复用 on_start 的挂单逻辑但不重置 _started。"""
-        # 调用 on_start 的挂单部分（重新挂当前价以下的买单、以上的卖单）
-        await self.on_start(ctx)
+        """增量补挂缺失层级（不重置 _started，不重复挂已活跃层级）。
+
+        遍历 levels 找出 ``i not in active_buy`` 和 ``i not in active_sell``
+        的层级，只补挂这些。复用 _place_grid_orders 的下单逻辑。
+        """
+        await self._place_grid_orders(ctx)
 
     async def on_tick(self, ctx: ExecutionContext) -> None:
-        """PnL 记录与可选的 REST 轮询兜底。网格主要靠 on_order_filled 维护。"""
-        # P0 简化：可不实现实质逻辑，PnL 记录由 ComposableStrategy 统一处理
-        pass
+        """REST 轮询兜底：定期检查活跃订单的 OKX 实际状态。
+
+        WebSocket 断连时通过 REST 轮询检测成交，触发 on_order_filled 回调。
+        距上次检查 ≥ 15 秒时执行。
+        """
+        import time
+        now = time.time()
+        if now - self._last_rest_check < 15.0:
+            return
+        self._last_rest_check = now
+
+        client = ctx.client
+        order_manager = ctx.order_manager
+        symbol = self.symbol
+
+        for order in order_manager.get_active_orders():
+            if order.symbol != symbol:
+                continue
+            try:
+                info = await client.get_order(symbol, order.ordId)
+                if info and len(info) > 0:
+                    state = info[0].get("state", "")
+                    if state != order.state:
+                        order_manager.update_order(
+                            order.ordId,
+                            state=state,
+                            fillPx=info[0].get("fillPx", ""),
+                            fillSz=info[0].get("fillSz", ""),
+                            fee=info[0].get("fee", ""),
+                        )
+            except Exception:
+                pass
 
     async def on_stop(self, ctx: ExecutionContext) -> None:
         """撤销所有挂单。"""
@@ -371,27 +495,29 @@ class TrendBlock:
         "fast_period": {"type": "integer", "label": "快均线周期", "required": True, "min": 1, "max": 50, "default": 5, "description": "快速移动平均线周期"},
         "slow_period": {"type": "integer", "label": "慢均线周期", "required": True, "min": 5, "max": 200, "default": 20, "description": "慢速移动平均线周期"},
         "direction": {"type": "select", "label": "交易方向", "required": False, "options": ["long", "short", "both"], "option_labels": ["做多", "做空", "双向"], "default": "both"},
+        "bar": {"type": "select", "label": "K线周期", "required": True, "options": ["1m", "5m", "15m", "1H", "4H", "1D"], "option_labels": ["1分钟", "5分钟", "15分钟", "1小时", "4小时", "1天"], "default": "1H", "description": "K线周期"},
         "symbol": {"type": "string", "label": "交易对", "required": True, "description": "如 BTC-USDT"},
     }
 
     def __init__(self, fast_period: int, slow_period: int, symbol: str,
-                 direction: str = "both"):
+                 direction: str = "both", bar: str = "1H"):
         self.fast_period = int(fast_period)
         self.slow_period = int(slow_period)
         self.symbol = symbol
         self.direction = direction
+        self.bar = bar
         # 状态
         self.last_signal: str | None = None
 
     async def on_start(self, ctx: ExecutionContext) -> None:
         """初始化历史价格缓存与信号状态。"""
         self.last_signal = None
-        _record(ctx, "started", f"双均线趋势策略启动: {self.symbol} fast={self.fast_period} slow={self.slow_period}")
+        _record(ctx, "started", f"双均线趋势策略启动: {self.symbol} fast={self.fast_period} slow={self.slow_period} bar={self.bar}")
 
     async def on_tick(self, ctx: ExecutionContext) -> None:
         """计算快慢均线，检测金叉/死叉并下单。"""
         limit = str(self.slow_period + 10)
-        closes = await _fetch_closes(ctx.client, self.symbol, bar="1H", limit=limit)
+        closes = await _fetch_closes(ctx.client, self.symbol, bar=self.bar, limit=limit)
         if len(closes) < self.slow_period + 1:
             return
 
@@ -462,26 +588,28 @@ class RsiBlock:
         "oversold": {"type": "integer", "label": "超卖阈值", "required": False, "min": 10, "max": 45, "default": 30, "description": "RSI 低于该值买入"},
         "overbought": {"type": "integer", "label": "超买阈值", "required": False, "min": 55, "max": 90, "default": 70, "description": "RSI 高于该值卖出"},
         "direction": {"type": "select", "label": "交易方向", "required": False, "options": ["long", "short", "both"], "option_labels": ["做多", "做空", "双向"], "default": "both"},
+        "bar": {"type": "select", "label": "K线周期", "required": True, "options": ["1m", "5m", "15m", "1H", "4H", "1D"], "option_labels": ["1分钟", "5分钟", "15分钟", "1小时", "4小时", "1天"], "default": "1H", "description": "K线周期"},
         "symbol": {"type": "string", "label": "交易对", "required": True, "description": "如 BTC-USDT"},
     }
 
     def __init__(self, period: int, symbol: str, oversold: int = 30,
-                 overbought: int = 70, direction: str = "both"):
+                 overbought: int = 70, direction: str = "both", bar: str = "1H"):
         self.period = int(period)
         self.oversold = int(oversold)
         self.overbought = int(overbought)
         self.symbol = symbol
         self.direction = direction
+        self.bar = bar
         self.last_signal: str | None = None
 
     async def on_start(self, ctx: ExecutionContext) -> None:
         """初始化信号状态。"""
         self.last_signal = None
-        _record(ctx, "started", f"RSI 策略启动: {self.symbol} period={self.period}")
+        _record(ctx, "started", f"RSI 策略启动: {self.symbol} period={self.period} bar={self.bar}")
 
     async def on_tick(self, ctx: ExecutionContext) -> None:
         """计算 RSI，超卖买入，超买卖出。"""
-        closes = await _fetch_closes(ctx.client, self.symbol, bar="1H",
+        closes = await _fetch_closes(ctx.client, self.symbol, bar=self.bar,
                                      limit=str(self.period + 2))
         rsi = _rsi(closes, self.period)
         if rsi is None:
@@ -541,24 +669,26 @@ class BollingerBlock:
         "period": {"type": "integer", "label": "计算周期", "required": True, "min": 10, "max": 50, "default": 20, "description": "布林带计算周期"},
         "std_multiplier": {"type": "number", "label": "标准差倍数", "required": False, "min": 1.0, "max": 3.5, "default": 2.0, "description": "标准差倍数"},
         "direction": {"type": "select", "label": "交易方向", "required": False, "options": ["long", "short", "both"], "option_labels": ["做多", "做空", "双向"], "default": "both"},
+        "bar": {"type": "select", "label": "K线周期", "required": True, "options": ["1m", "5m", "15m", "1H", "4H", "1D"], "option_labels": ["1分钟", "5分钟", "15分钟", "1小时", "4小时", "1天"], "default": "1H", "description": "K线周期"},
         "symbol": {"type": "string", "label": "交易对", "required": True, "description": "如 BTC-USDT"},
     }
 
     def __init__(self, period: int, symbol: str, std_multiplier: float = 2.0,
-                 direction: str = "both"):
+                 direction: str = "both", bar: str = "1H"):
         self.period = int(period)
         self.std_multiplier = float(std_multiplier)
         self.symbol = symbol
         self.direction = direction
+        self.bar = bar
         self.last_signal: str | None = None
 
     async def on_start(self, ctx: ExecutionContext) -> None:
         self.last_signal = None
-        _record(ctx, "started", f"布林带策略启动: {self.symbol} period={self.period} std={self.std_multiplier}")
+        _record(ctx, "started", f"布林带策略启动: {self.symbol} period={self.period} std={self.std_multiplier} bar={self.bar}")
 
     async def on_tick(self, ctx: ExecutionContext) -> None:
         """计算布林带上下轨，价格<下轨买入，价格>上轨卖出。"""
-        closes = await _fetch_closes(ctx.client, self.symbol, bar="1H",
+        closes = await _fetch_closes(ctx.client, self.symbol, bar=self.bar,
                                      limit=str(self.period + 2))
         bands = _bollinger(closes, self.period, self.std_multiplier)
         if bands is None or not closes:
@@ -619,25 +749,27 @@ class DonchianBlock:
         "entry_period": {"type": "integer", "label": "入场周期", "required": True, "min": 10, "max": 60, "default": 20, "description": "突破入场回溯周期"},
         "exit_period": {"type": "integer", "label": "离场周期", "required": False, "min": 5, "max": 30, "default": 10, "description": "离场回溯周期"},
         "direction": {"type": "select", "label": "交易方向", "required": False, "options": ["long", "short", "both"], "option_labels": ["做多", "做空", "双向"], "default": "both"},
+        "bar": {"type": "select", "label": "K线周期", "required": True, "options": ["1m", "5m", "15m", "1H", "4H", "1D"], "option_labels": ["1分钟", "5分钟", "15分钟", "1小时", "4小时", "1天"], "default": "1H", "description": "K线周期"},
         "symbol": {"type": "string", "label": "交易对", "required": True, "description": "如 BTC-USDT"},
     }
 
     def __init__(self, entry_period: int, symbol: str, exit_period: int = 10,
-                 direction: str = "both"):
+                 direction: str = "both", bar: str = "1H"):
         self.entry_period = int(entry_period)
         self.exit_period = int(exit_period)
         self.symbol = symbol
         self.direction = direction
+        self.bar = bar
         self.position_side: str | None = None  # 当前持仓方向
 
     async def on_start(self, ctx: ExecutionContext) -> None:
         self.position_side = None
-        _record(ctx, "started", f"唐奇安通道策略启动: {self.symbol} entry={self.entry_period} exit={self.exit_period}")
+        _record(ctx, "started", f"唐奇安通道策略启动: {self.symbol} entry={self.entry_period} exit={self.exit_period} bar={self.bar}")
 
     async def on_tick(self, ctx: ExecutionContext) -> None:
         """计算通道高低点，突破入场最高价做多，跌破离场最低价平多。"""
         lookback = max(self.entry_period, self.exit_period) + 2
-        closes = await _fetch_closes(ctx.client, self.symbol, bar="1H",
+        closes = await _fetch_closes(ctx.client, self.symbol, bar=self.bar,
                                      limit=str(lookback))
         if len(closes) < self.entry_period + 1:
             return

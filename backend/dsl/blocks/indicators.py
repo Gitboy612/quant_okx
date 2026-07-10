@@ -61,10 +61,19 @@ class PriceLast:
         self.symbol = args["symbol"]
 
     async def compute(self, ctx: ExecutionContext) -> float:
+        # symbol 为空时回退到 ctx.symbol（实例级交易对）
+        symbol = self.symbol or ctx.symbol
+        if not symbol:
+            return 0.0
         # 若 symbol == ctx.symbol 且 current_price > 0，直接用缓存价避免重复请求
-        if self.symbol == ctx.symbol and ctx.current_price > 0:
+        if symbol == ctx.symbol and ctx.current_price > 0:
             return float(ctx.current_price)
-        data = await ctx.client.get_ticker(self.symbol)
+        try:
+            data = await ctx.client.get_ticker(symbol)
+        except Exception:
+            return 0.0
+        if not data:
+            return 0.0
         return float(data[0]["last"])
 
 
@@ -95,9 +104,12 @@ class PriceChangePct:
         self.symbol = args["symbol"]
 
     async def compute(self, ctx: ExecutionContext) -> float:
+        symbol = self.symbol or ctx.symbol
+        if not symbol:
+            return 0.0
         bar = _window_to_bar(self.window)
         try:
-            candles = await ctx.client.get_candles(self.symbol, bar=bar, limit="2")
+            candles = await ctx.client.get_candles(symbol, bar=bar, limit="2")
         except Exception:
             return 0.0
         if not candles or len(candles) < 2:
@@ -114,7 +126,7 @@ class PriceChangePct:
             current = float(ctx.current_price)
         else:
             try:
-                data = await ctx.client.get_ticker(self.symbol)
+                data = await ctx.client.get_ticker(symbol)
                 current = float(data[0]["last"])
             except Exception:
                 return 0.0
@@ -145,9 +157,12 @@ class RSI:
 
     async def compute(self, ctx: ExecutionContext) -> float:
         period = self.period
+        symbol = self.symbol or ctx.symbol
+        if not symbol:
+            return 50.0
         try:
             candles = await ctx.client.get_candles(
-                self.symbol, bar="1H", limit=str(period + 1)
+                symbol, bar="1H", limit=str(period + 1)
             )
         except Exception:
             return 50.0
@@ -212,12 +227,15 @@ class PositionQty:
         self.symbol = args["symbol"]
 
     async def compute(self, ctx: ExecutionContext) -> float:
+        symbol = self.symbol or ctx.symbol
+        if not symbol:
+            return 0.0
         try:
             positions = await ctx.client.get_positions()
         except Exception:
             return 0.0
         for pos in positions:
-            if pos.get("instId") == self.symbol:
+            if pos.get("instId") == symbol:
                 try:
                     return float(pos.get("pos", "0"))
                 except (ValueError, TypeError):
@@ -242,12 +260,15 @@ class PositionPnl:
         self.symbol = args["symbol"]
 
     async def compute(self, ctx: ExecutionContext) -> float:
+        symbol = self.symbol or ctx.symbol
+        if not symbol:
+            return 0.0
         try:
             positions = await ctx.client.get_positions()
         except Exception:
             return 0.0
         for pos in positions:
-            if pos.get("instId") == self.symbol:
+            if pos.get("instId") == symbol:
                 try:
                     return float(pos.get("upl", "0"))
                 except (ValueError, TypeError):

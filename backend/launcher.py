@@ -2,6 +2,7 @@
 
 启动 uvicorn 后台服务，等待端口就绪后打开浏览器，关闭窗口/Ctrl+C 时优雅退出。
 """
+import asyncio
 import os
 import sys
 import time
@@ -9,6 +10,12 @@ import socket
 import signal
 import threading
 import webbrowser
+
+# Windows 平台使用 ProactorEventLoop，避免 SelectorEventLoop 下 asyncio 子进程/
+# 管道操作触发 "too many file descriptors"（socket 选择器有 512 句柄上限）。
+# 必须在 uvicorn 创建事件循环之前设置策略。
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 # 确保 backend 目录在 sys.path 中（源码运行时）
 if not getattr(sys, "frozen", False):

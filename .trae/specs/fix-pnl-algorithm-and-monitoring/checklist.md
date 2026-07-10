@@ -1,0 +1,35 @@
+# Checklist
+
+- [x] PnlRecord 模型包含 `is_final` 字段（Boolean, default=False）
+- [x] `pnl_records` 表存在 `(strategy_instance_id, recorded_at)` 复合索引
+- [x] OrderManager 维护 `_net_position`、`_avg_buy_price`、`_total_buy_qty`、`_total_buy_value` 状态
+- [x] OrderManager 提供 `get_position_summary()` 返回 (net_position, avg_buy_price)
+- [x] OrderManager 提供 `restore_position()` 供重启恢复
+- [x] OrderManager 买单成交时累加净持仓与加权均价
+- [x] OrderManager 卖单成交时扣减净持仓
+- [x] OrderManager `_async_persist` 使用 `asyncio.to_thread`（不再用 threading.Thread）
+- [x] OrderManager `_trigger_callbacks` 使用 `asyncio.create_task`（不再用 ensure_future）
+- [x] GridStrategy 卖单成交 `cycle_pnl` 扣除买单 fee + 卖单 fee
+- [x] grid_idx=0 卖单成交时不计算 realized_pnl，记录 `order_warn` 事件
+- [x] GridStrategy unrealized_pnl 基于净持仓（非 _active_buy_orders）
+- [x] 合约 symbol 优先用 `get_positions().upl` 计算 unrealized
+- [x] 现货 symbol 用本地净持仓 × (当前价 - 均价) 计算 unrealized
+- [x] ComposableStrategy 风控口径与 GridStrategy 一致
+- [x] BaseStrategy.start() 注册 `ws_client.on_order_update` 回调
+- [x] WS 回调内调用 `order_manager.update_order` 并捕获异常
+- [x] GridStrategy 主循环 PnL 记录间隔 ≥ 60s 或变化 > 1%
+- [x] TrendStrategy / AdvancedGridHedgeStrategy 采用 60s 采样
+- [x] `record_final_pnl` 保留最后 unrealized_pnl 值（非 0）
+- [x] 终态 PnlRecord 标记 `is_final=True`
+- [x] 策略重启从 is_final 记录恢复 realized_pnl 与持仓
+- [x] `/api/pnl/summary` 的 `total_unrealized` 取 `latest.unrealized_pnl`
+- [x] `/api/pnl/summary` 响应包含 `by_strategy` 字段
+- [x] `/api/pnl` 列表响应包含 `is_final` 字段
+- [x] TrendStrategy/AdvancedGridHedgeStrategy 的 record_pnl 记录策略级增量（非账户总权益）
+- [x] 单元测试：净持仓计算（买入累加、卖出扣减、均价更新）
+- [x] 单元测试：unrealized_pnl 基于持仓
+- [x] 单元测试：realized_pnl 扣手续费
+- [x] 单元测试：PnL Summary 取最新值
+- [x] 单元测试：WS 回调接入 order_manager
+- [x] 单元测试：停止时 is_final 标记与 unrealized 保留
+- [x] 单元测试：grid_idx=0 边界防护

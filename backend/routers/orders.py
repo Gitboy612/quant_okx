@@ -15,6 +15,7 @@ def list_orders(
     symbol: str | None = Query(None),
     status: str | None = Query(None, description="Filter by status: live, filled, canceled, partial_fill"),
     limit: int = Query(100, ge=1, le=1000),
+    sort_by: str = Query("created_at", description="Sort by: created_at or updated_at"),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -35,7 +36,8 @@ def list_orders(
         db_status = status_map.get(status, status)
         query = query.filter(Order.status == db_status)
 
-    orders = query.order_by(Order.created_at.desc()).limit(limit).all()
+    sort_column = Order.updated_at if sort_by == "updated_at" else Order.created_at
+    orders = query.order_by(sort_column.desc()).limit(limit).all()
     return [
         {
             "id": o.id,

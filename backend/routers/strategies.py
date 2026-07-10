@@ -1,5 +1,7 @@
 import hashlib
 import json
+import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from sqlalchemy.orm import Session
@@ -7,11 +9,30 @@ from database import get_db
 from models.user import User
 from models.strategy import StrategyTemplate, StrategyInstance
 from models.log import OperationLog
-from schemas.strategy import StrategyInstanceCreate, StrategyInstanceUpdate, StrategyTemplateCreate
+from schemas.strategy import StrategyInstanceCreate, StrategyInstanceUpdate, StrategyTemplateCreate, StrategyTemplateUpdate
 from services.strategy_engine import strategy_engine
 from middleware.auth import get_current_user
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/strategies", tags=["strategies"])
+
+
+def to_utc_iso(dt: datetime | None) -> str | None:
+    """将 datetime 序列化为带 Z 后缀的 UTC ISO 字符串。
+
+    - None 返回 None
+    - naive datetime（无 tzinfo，SQLite 常见情况）视为 UTC
+    - aware datetime 转换为 UTC
+    - 输出 isoformat 并确保以 'Z' 结尾
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return dt.isoformat().replace("+00:00", "Z")
 
 
 def _compute_logic_hash(qs_model_config: dict | None, dsl_config: dict | None) -> str | None:
@@ -139,6 +160,57 @@ def create_template(
     return _serialize_template(template)
 
 
+@router.put("/templates/{template_id}")
+def update_template(
+    template_id: int,
+    body: StrategyTemplateUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    template = db.query(StrategyTemplate).filter(StrategyTemplate.id == template_id).first()
+    if not template:
+        raise HTTPException(status_code=404, detail="策略模板不存在")
+
+    # Partial update：仅更新请求中提供的字段，未提供字段保持原值
+    if body.name is not None:
+        template.name = body.name
+    if body.description is not None:
+        template.description = body.description
+    if body.default_params is not None:
+        template.default_params = body.default_params
+    if body.param_schema is not None:
+        template.param_schema = body.param_schema
+    if body.dsl_config is not None:
+        template.dsl_config = body.dsl_config
+    if body.qs_model_config is not None:
+        template.qs_model_config = body.qs_model_config
+
+    # logic_hash 重算：若 qs_model_config.logic 段变化，重新计算 SHA-256
+    # （参考 create_template 中的 _compute_logic_hash 计算逻辑）
+    # 若 qs_model_config 未提供或 logic 未变化，保留原 logic_hash
+    if body.qs_model_config is not None:
+        new_logic_hash = _compute_logic_hash(template.qs_model_config, template.dsl_config)
+        if new_logic_hash != template.logic_hash:
+            template.logic_hash = new_logic_hash
+
+    db.commit()
+    db.refresh(template)
+
+    log = OperationLog(
+        user_id=user.id,
+        action="update_strategy_template",
+        target_type="strategy_template",
+        target_id=template.id,
+        detail={"name": template.name},
+        ip_address=request.client.host if request.client else "",
+    )
+    db.add(log)
+    db.commit()
+
+    return _serialize_template(template)
+
+
 @router.delete("/templates/{template_id}")
 def delete_template(
     template_id: int,
@@ -187,10 +259,10 @@ def list_instances(db: Session = Depends(get_db), user: User = Depends(get_curre
             "params": inst.params,
             "status": inst.status,
             "logic_hash": inst.logic_hash,
-            "started_at": inst.started_at.isoformat() if inst.started_at else None,
-            "stopped_at": inst.stopped_at.isoformat() if inst.stopped_at else None,
-            "created_at": inst.created_at.isoformat() if inst.created_at else None,
-            "updated_at": inst.updated_at.isoformat() if inst.updated_at else None,
+            "started_at": to_utc_iso(inst.started_at),
+            "stopped_at": to_utc_iso(inst.stopped_at),
+            "created_at": to_utc_iso(inst.created_at),
+            "updated_at": to_utc_iso(inst.updated_at),
         })
     return result
 
@@ -205,6 +277,20 @@ def create_instance(
     template = db.query(StrategyTemplate).filter(StrategyTemplate.id == body.template_id).first()
     if not template:
         raise HTTPException(status_code=404, detail="策略模板不存在")
+
+    # QS-Model 币对锁定：模板 meta.base_symbol 非空时，强制 instance symbol 为该值（忽略用户输入）
+    qs_meta_base_symbol = ""
+    qs_config = getattr(template, "qs_model_config", None)
+    if isinstance(qs_config, dict):
+        meta = qs_config.get("meta") or {}
+        if isinstance(meta, dict):
+            qs_meta_base_symbol = (meta.get("base_symbol") or "").strip()
+    if qs_meta_base_symbol and qs_meta_base_symbol != body.symbol:
+        logger.warning(
+            "create_instance: 模板 %s 锁定 base_symbol=%s，忽略用户传入的 symbol=%s",
+            template.id, qs_meta_base_symbol, body.symbol,
+        )
+        body.symbol = qs_meta_base_symbol
 
     merged_params = {**template.default_params, **body.params, "symbol": body.symbol}
     # 若模板含 qs_model_config，合并到 params（类似 dsl_config 的合并逻辑）
@@ -240,7 +326,7 @@ def create_instance(
 
 
 @router.put("/instances/{instance_id}")
-def update_instance(
+async def update_instance(
     instance_id: int,
     body: StrategyInstanceUpdate,
     request: Request,
@@ -251,27 +337,28 @@ def update_instance(
     if not instance:
         raise HTTPException(status_code=404, detail="策略实例不存在")
 
+    # 委托 engine.update_params 处理 params 更新：检测 logic 段变化，
+    # 运行中改 logic 抛 400，非运行时允许并重算 logic_hash。
+    # 先做 params 校验（可能抛 400），再更新 name，避免 400 时 name 已落库。
+    if body.params is not None:
+        await strategy_engine.update_params(instance_id, body.params)
+        # engine 在独立 session 中已提交 params / logic_hash；刷新本 session 视图
+        db.refresh(instance)
+
     if body.name is not None:
         instance.name = body.name
-    if body.params is not None:
-        instance.params = body.params
-
-    db.commit()
+        db.commit()
 
     log = OperationLog(
         user_id=user.id,
         action="update_strategy_params",
         target_type="strategy",
         target_id=instance_id,
-        detail={"params": instance.params},
+        detail={"params": body.params if body.params is not None else instance.params},
         ip_address=request.client.host if request.client else "",
     )
     db.add(log)
     db.commit()
-
-    if instance.status == "running":
-        import asyncio
-        asyncio.create_task(strategy_engine.update_params(instance_id, instance.params))
 
     return {"message": "策略参数已更新"}
 
@@ -371,7 +458,7 @@ def list_api_call_logs(
             "response_code": l.response_code,
             "response_body": l.response_body,
             "status": l.status,
-            "created_at": l.created_at.isoformat() if l.created_at else None,
+            "created_at": to_utc_iso(l.created_at),
         }
         for l in logs
     ]

@@ -10,7 +10,13 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return bcrypt.checkpw(plain.encode(), hashed.encode())
+    # bcrypt 哈希必须以 $2a$/$2b$/$2y$ 开头且长度为 60，否则 checkpw 会抛 ValueError
+    if not hashed or not hashed.startswith(("$2a$", "$2b$", "$2y$")) or len(hashed) != 60:
+        return False
+    try:
+        return bcrypt.checkpw(plain.encode(), hashed.encode())
+    except ValueError:
+        return False
 
 
 def create_access_token(data: dict) -> str:
