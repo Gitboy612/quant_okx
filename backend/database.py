@@ -67,6 +67,7 @@ def init_db():
     from models.setting import UserSetting
     from models.system_settings import SystemSetting
     from models.strategy_event import StrategyEvent
+    from models.notification_rule import NotificationRule
 
     Base.metadata.create_all(bind=engine)
     _migrate_strategy_templates_dsl_config()

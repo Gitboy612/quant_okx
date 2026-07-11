@@ -29,3 +29,11 @@ export const getProxyStatus = () => client.get('/settings/proxy/status')
 export const startProxy = (data?: { config_path?: string; port?: number; bootstrap_proxy?: string }) => client.post('/settings/proxy/start', data || {})
 export const stopProxy = () => client.post('/settings/proxy/stop')
 export const getMmdbStatus = () => client.get('/settings/proxy/mmdb-status')
+
+export interface RateLimitStatus {
+  remaining: number | null
+  limit: number | null
+  percentage: number | null
+}
+
+export const getRateLimitStatus = () => client.get<RateLimitStatus>('/settings/rate-limit')

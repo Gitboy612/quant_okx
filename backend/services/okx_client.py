@@ -212,6 +212,8 @@ class OKXClient:
         url = self.base_url + path
         try:
             resp = self._client.request(method, url, headers=headers, content=body_str if body_str else None)
+            # 从响应头更新限流配额状态（同步路径）
+            self._async_client._update_rate_limit_from_headers(resp)
             raw_text = resp.text.strip()
             if not raw_text:
                 content_type = resp.headers.get("content-type", "unknown")
@@ -262,6 +264,27 @@ class OKXClient:
     async def aclose(self):
         await self._async_client.aclose()
         self._client.close()
+
+    def get_rate_limit_status(self) -> dict:
+        """返回当前 API 限流配额状态。
+
+        从最近一次请求的响应头中读取 X-RateLimit-Remaining / X-RateLimit-Limit。
+        在尚未发起任何请求时返回 None 值。
+
+        Returns:
+            {"remaining": int|None, "limit": int|None, "percentage": float|None}
+            percentage = remaining / limit * 100，limit 为 0 或 None 时为 None。
+        """
+        remaining = self._async_client._rate_limit_remaining
+        limit = self._async_client._rate_limit_limit
+        percentage = None
+        if limit and limit > 0 and remaining is not None:
+            percentage = round(remaining / limit * 100, 1)
+        return {
+            "remaining": remaining,
+            "limit": limit,
+            "percentage": percentage,
+        }
 
     def __del__(self):
         try:

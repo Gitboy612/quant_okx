@@ -210,3 +210,49 @@ export interface StrategyEvent {
   details: string | null
   created_at: string
 }
+
+export interface AttributionBySymbol {
+  symbol: string
+  realized_pnl: number
+  fee: number
+  trade_count: number
+  win_rate: number
+  pnl_percentage: number
+  pnl_share?: number
+}
+
+export interface AttributionByStrategyType {
+  strategy_type: string
+  realized_pnl: number
+  unrealized_pnl: number
+  trade_count: number
+  win_rate: number
+  avg_return: number
+  max_drawdown: number
+}
+
+export interface AttributionByPeriod {
+  period_start: string
+  realized_pnl: number
+  unrealized_pnl: number
+  total_pnl: number
+  trade_count: number
+}
+
+export interface DrillDownOrder {
+  id: number
+  strategy_instance_id: number | null
+  account_id: number
+  symbol: string
+  side: string
+  order_type: string
+  price: number | null
+  fill_px: number | null
+  fill_sz: number | null
+  filled_quantity: number
+  fee: number | null
+  status: string
+  state: string | null
+  created_at: string
+  updated_at: string | null
+}

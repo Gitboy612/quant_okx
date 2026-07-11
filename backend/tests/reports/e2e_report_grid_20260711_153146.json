@@ -1,0 +1,28 @@
+{
+  "generated_at": "2026-07-11T07:31:46.212434+00:00",
+  "module": "grid",
+  "total": 7,
+  "passed": 5,
+  "failed": 2,
+  "errors": 0,
+  "skipped": 0,
+  "pass_rate": 0.7143,
+  "duration_seconds": 3.45,
+  "failures": [
+    {
+      "module": "test_demo_grid_e2e",
+      "test": "test_grid_stop_verifies_orders_canceled",
+      "outcome": "failed",
+      "duration": 0.353,
+      "message": "backend\\tests\\e2e\\test_demo_grid_e2e.py:193: in test_grid_stop_verifies_orders_canceled\n    assert live_after == 0, f\"停止后仍有 {live_after} 笔 live 订单（应全部撤销）\"\nE   AssertionError: 停止后仍有 4 笔 live 订单（应全部撤销）\nE   assert 4 == 0"
+    },
+    {
+      "module": "test_demo_grid_e2e",
+      "test": "test_grid_full_lifecycle",
+      "outcome": "failed",
+      "duration": 0.683,
+      "message": "backend\\tests\\e2e\\test_demo_grid_e2e.py:239: in test_grid_full_lifecycle\n    assert count_live_orders(iid) == 0, \"停止后应无 live 订单\"\nE   AssertionError: 停止后应无 live 订单\nE   assert 3 == 0\nE    +  where 3 = count_live_orders(2)"
+    }
+  ],
+  "summary": "5/7 passed (71.43%)"
+}

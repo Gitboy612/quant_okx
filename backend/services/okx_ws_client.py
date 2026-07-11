@@ -15,10 +15,22 @@ logger = logging.getLogger(__name__)
 
 WS_DEMO_URL = "wss://wspap.okx.com:8443/ws/v5/private"
 WS_LIVE_URL = "wss://ws.okx.com:8443/ws/v5/private"
+WS_PUBLIC_DEMO_URL = "wss://wspap.okx.com:8443/ws/v5/public"
+WS_PUBLIC_LIVE_URL = "wss://ws.okx.com:8443/ws/v5/public"
 
 # Circuit breaker states for the WebSocket reconnect logic.
 CIRCUIT_CLOSED = "closed"
 CIRCUIT_OPEN = "open"
+
+# Mapping from short interval labels to OKX candle channel names.
+CANDLE_INTERVALS = {
+    "1m": "candle1m",
+    "5m": "candle5m",
+    "15m": "candle15m",
+    "1H": "candle1H",
+    "4H": "candle4H",
+    "1D": "candle1D",
+}
 
 
 def _ws_timestamp() -> int:
@@ -324,3 +336,180 @@ class OKXWsClient:
                         cb(ord_id, state, item)
                     except Exception as e:
                         logger.error(f"Order callback error: {e}")
+
+
+class OKXPublicWsClient(OKXWsClient):
+    """WebSocket client for OKX public market-data channels (no auth required).
+
+    Reuses the parent's reconnect / circuit-breaker / message-loop logic by
+    overriding ``_connect_and_login`` to skip the login handshake and use the
+    public endpoint.  Supports the ``tickers``, ``candle*`` and ``books``
+    channels.
+    """
+
+    def __init__(self, trade_mode: str = "live"):
+        # Public channels need no credentials — pass empty strings to parent.
+        super().__init__(
+            api_key="",
+            secret_key="",
+            passphrase="",
+            trade_mode=trade_mode,
+        )
+        self._ws_url = os.getenv(
+            "OKX_WS_PUBLIC_URL",
+            WS_PUBLIC_DEMO_URL if trade_mode == "demo" else WS_PUBLIC_LIVE_URL,
+        )
+        self._ticker_callbacks: list[callable] = []
+        self._candle_callbacks: list[callable] = []
+        self._books_callbacks: list[callable] = []
+        # Track public subscriptions separately from the parent's private
+        # ``_subscriptions`` (orders) so they are re-subscribed on reconnect.
+        self._public_subscriptions: list[dict] = []
+
+    # ------------------------------------------------------------------
+    # Connection (override — no login for public channels)
+    # ------------------------------------------------------------------
+
+    async def _connect_and_login(self):
+        """Connect to the public WebSocket endpoint without logging in."""
+        logger.info(f"Connecting to OKX public WebSocket: {self._ws_url}")
+        try:
+            connect_kwargs = {"ping_interval": None}
+            proxy = _get_proxy()
+            if proxy:
+                connect_kwargs["proxy"] = proxy
+                logger.info(f"Using proxy for public WebSocket: {proxy}")
+            self._ws = await websockets.connect(self._ws_url, **connect_kwargs)
+            self._connected = True
+            self._disconnected_at = None
+            logger.info("Public WebSocket connected")
+
+            # Re-subscribe to all public channels after (re)connect.
+            for sub in self._public_subscriptions:
+                await self._send_subscribe(sub)
+
+            self._message_task = asyncio.create_task(self._message_loop())
+        except Exception as e:
+            logger.error(f"Public WebSocket connection failed: {e}")
+            self._connected = False
+            self._disconnected_at = time.time()
+
+    # ------------------------------------------------------------------
+    # Callback registration
+    # ------------------------------------------------------------------
+
+    def on_ticker_update(self, callback: callable):
+        """Register a callback for ticker updates.
+
+        Callback signature: callback(ticker_data: dict)
+        ``ticker_data`` is the raw OKX ticker dict (includes ``instId``,
+        ``last``, ``bidPx``, ``askPx`` etc.).
+        """
+        self._ticker_callbacks.append(callback)
+
+    def on_candle_update(self, callback: callable):
+        """Register a callback for candle updates.
+
+        Callback signature: callback(inst_id: str, interval: str, candle: list)
+        """
+        self._candle_callbacks.append(callback)
+
+    def on_books_update(self, callback: callable):
+        """Register a callback for order-book updates.
+
+        Callback signature: callback(inst_id: str, books: dict)
+        """
+        self._books_callbacks.append(callback)
+
+    # ------------------------------------------------------------------
+    # Subscribe / unsubscribe
+    # ------------------------------------------------------------------
+
+    async def subscribe_ticker(self, symbols: list[str]):
+        """Subscribe to the ``tickers`` channel for the given symbols."""
+        for symbol in symbols:
+            sub = {"channel": "tickers", "instId": symbol}
+            if sub not in self._public_subscriptions:
+                self._public_subscriptions.append(sub)
+            if self._connected:
+                await self._send_subscribe(sub)
+                logger.info(f"Subscribed to tickers: {symbol}")
+
+    async def subscribe_candle(self, symbols: list[str], interval: str = "1m"):
+        """Subscribe to a candle channel for the given symbols.
+
+        ``interval`` is a short label such as ``"1m"``, ``"5m"``, ``"1H"``;
+        it is mapped to the OKX channel name (``candle1m`` etc.) via
+        :data:`CANDLE_INTERVALS`.
+        """
+        channel = CANDLE_INTERVALS.get(interval, f"candle{interval}")
+        for symbol in symbols:
+            sub = {"channel": channel, "instId": symbol}
+            if sub not in self._public_subscriptions:
+                self._public_subscriptions.append(sub)
+            if self._connected:
+                await self._send_subscribe(sub)
+                logger.info(f"Subscribed to {channel}: {symbol}")
+
+    async def subscribe_books(self, symbols: list[str]):
+        """Subscribe to the ``books`` channel for the given symbols."""
+        for symbol in symbols:
+            sub = {"channel": "books", "instId": symbol}
+            if sub not in self._public_subscriptions:
+                self._public_subscriptions.append(sub)
+            if self._connected:
+                await self._send_subscribe(sub)
+                logger.info(f"Subscribed to books: {symbol}")
+
+    async def unsubscribe_ticker(self, symbols: list[str]):
+        """Unsubscribe from the ``tickers`` channel for the given symbols."""
+        for symbol in symbols:
+            sub = {"channel": "tickers", "instId": symbol}
+            if sub in self._public_subscriptions:
+                self._public_subscriptions.remove(sub)
+            if self._connected:
+                await self._send_unsubscribe(sub)
+                logger.info(f"Unsubscribed from tickers: {symbol}")
+
+    async def _send_subscribe(self, sub: dict):
+        msg = {"op": "subscribe", "args": [sub]}
+        await self._ws.send(json.dumps(msg))
+
+    async def _send_unsubscribe(self, sub: dict):
+        msg = {"op": "unsubscribe", "args": [sub]}
+        await self._ws.send(json.dumps(msg))
+
+    # ------------------------------------------------------------------
+    # Data dispatch
+    # ------------------------------------------------------------------
+
+    async def _handle_data(self, msg: dict):
+        arg = msg.get("arg", {})
+        channel = arg.get("channel", "")
+        data_list = msg.get("data", [])
+
+        if channel == "tickers":
+            for item in data_list:
+                for cb in self._ticker_callbacks:
+                    try:
+                        cb(item)
+                    except Exception as e:
+                        logger.error(f"Ticker callback error: {e}")
+        elif channel.startswith("candle"):
+            inst_id = arg.get("instId", "")
+            for candle in data_list:
+                for cb in self._candle_callbacks:
+                    try:
+                        cb(inst_id, channel, candle)
+                    except Exception as e:
+                        logger.error(f"Candle callback error: {e}")
+        elif channel in ("books", "books5", "bbo-tbt", "books-tbt"):
+            inst_id = arg.get("instId", "")
+            for item in data_list:
+                for cb in self._books_callbacks:
+                    try:
+                        cb(inst_id, item)
+                    except Exception as e:
+                        logger.error(f"Books callback error: {e}")
+        else:
+            logger.debug(f"Unhandled public channel: {channel} {msg}")

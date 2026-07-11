@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { listLogs } from '../api/logs'
+import VirtualTable, { type Column } from '../components/VirtualTable'
 import type { OperationLog, PaginatedResponse } from '../types'
 
 const actionLabels: Record<string, string> = {
@@ -26,6 +27,28 @@ function parseUTC(dateStr: string): Date {
   return new Date(dateStr + 'Z')
 }
 
+const logColumns: Column<OperationLog>[] = [
+  { key: 'created_at', header: '时间', render: (l) => (
+    <span className="text-xs text-[#7B86A2] font-mono whitespace-nowrap">
+      {parseUTC(l.created_at).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+    </span>
+  ) },
+  { key: 'action', header: '操作', render: (l) => (
+    <span className="text-sm">{actionLabels[l.action] || l.action}</span>
+  ) },
+  { key: 'target', header: '目标', render: (l) => (
+    l.target_type ? (
+      <span className="text-xs text-[#7B86A2]">
+        {l.target_type === 'strategy' ? '策略' : l.target_type === 'account' ? '账户' : l.target_type}
+        {l.target_id ? ` #${l.target_id}` : ''}
+      </span>
+    ) : <span className="text-xs text-[#505C78]">-</span>
+  ) },
+  { key: 'ip_address', header: 'IP', render: (l) => (
+    <span className="text-xs text-[#7B86A2] font-mono">{l.ip_address || '-'}</span>
+  ) },
+]
+
 export default function LogsPage() {
   const [data, setData] = useState<PaginatedResponse<OperationLog>>({ total: 0, items: [] })
 
@@ -49,6 +72,8 @@ export default function LogsPage() {
           <div className="py-12 text-center text-[#7B86A2] text-sm">
             暂无操作记录
           </div>
+        ) : data.items.length > 100 ? (
+          <VirtualTable columns={logColumns} data={data.items} keyField="id" height={500} />
         ) : (
           <div className="space-y-0">
             {data.items.map((log, i) => (
@@ -78,7 +103,7 @@ export default function LogsPage() {
                   )}
                 </div>
                 {log.ip_address && (
-                  <span className="text-xs text-[#7B86A2] font-mono">{log.ip_address}</span>
+                  <span className="text-xs text-[#7B86A2] font-mono hidden sm:inline">{log.ip_address}</span>
                 )}
               </motion.div>
             ))}

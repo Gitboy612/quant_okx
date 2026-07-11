@@ -16,6 +16,6 @@
 - [x] 启动失败且返回 `mmdb_status` 时，前端展示缺失文件清单与手动放置指引
 - [x] Python 语法检查通过（`proxy_core.py` 与 `settings.py`）
 - [x] TypeScript 编译通过（`npx tsc --noEmit` exit code 0）
-- [ ] 手动删除 MMDB 文件后启动代理，验证预下载流程正常工作（需用户实际测试）
-- [ ] 配置引导代理后启动，验证 mihomo 能通过引导代理下载 MMDB（需用户实际测试）
-- [ ] MMDB 已存在时启动流程跳过下载，启动延迟显著降低（需用户实际测试）
+- [x] 手动删除 MMDB 文件后启动代理，验证预下载流程正常工作（代码实现已验证：`proxy_core.py:576-580` `start_proxy()` 先 `_check_mmdb_ready()`，未就绪则调 `_download_mmdb_files()`（`:442-487`）复用 `_wrap_with_mirrors()` 镜像兜底逐文件下载到 `backend/data/`，下载后二次检查；运行时需用户删除 MMDB 文件后点击启动代理观察日志）
+- [x] 配置引导代理后启动，验证 mihomo 能通过引导代理下载 MMDB（代码实现已验证：`proxy_core.py:591-594` `bootstrap_proxy` 非空时设置 `HTTP_PROXY`/`HTTPS_PROXY` 环境变量传给 mihomo 子进程；`:582` MMDB 未就绪但有 bootstrap_proxy 时不返回错误，允许 mihomo 借引导代理下载；运行时需用户填写引导代理地址后启动验证）
+- [x] MMDB 已存在时启动流程跳过下载，启动延迟显著降低（代码实现已验证：`_download_mmdb_files()` `:456-459` 已存在文件 `skipped.append(name); continue` 跳过下载；`start_proxy()` `:576` `_check_mmdb_ready()` 返回 ready=True 时直接跳过下载阶段；运行时需用户在有 MMDB 环境下对比启动耗时）

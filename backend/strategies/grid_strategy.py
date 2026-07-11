@@ -3,6 +3,7 @@ import math
 import time
 import traceback
 from strategies.base_strategy import BaseStrategy
+from services.market_data_service import market_data_service
 
 
 class GridStrategy(BaseStrategy):
@@ -19,6 +20,40 @@ class GridStrategy(BaseStrategy):
             return False
         return True
 
+    def _find_grid_index(self, px: float) -> int | None:
+        """Bug 3: 精确档位索引匹配，容差作为兜底。
+
+        优先精确匹配（rounded grid price == px，用 1e-9 容差消除浮点误差）；
+        精确匹配失败时回退到容差 < tick_size * 0.6 的最近层级。
+        解决密集网格下纯容差匹配可能错位到相邻档位的问题。
+        """
+        if not getattr(self, "_grid_levels", None):
+            return None
+        # 1. 精确档位匹配
+        for i, level in enumerate(self._grid_levels):
+            price = round(round(level / self._grid_tick_size) * self._grid_tick_size, self._grid_tick_decimals)
+            if abs(price - px) < 1e-9:
+                return i
+        # 2. 兜底：容差范围内找最近层级
+        best_idx = None
+        best_diff = self._grid_tick_size * 0.6
+        for i, level in enumerate(self._grid_levels):
+            price = round(round(level / self._grid_tick_size) * self._grid_tick_size, self._grid_tick_decimals)
+            diff = abs(price - px)
+            if diff < best_diff:
+                best_diff = diff
+                best_idx = i
+        return best_idx
+
+    def _on_ticker_update(self, ticker_data: dict):
+        """WebSocket ticker callback — update cached latest price."""
+        try:
+            last = ticker_data.get("last")
+            if last:
+                self._latest_price = float(last)
+        except Exception as e:
+            print(f"[GridStrategy] _on_ticker_update error: {e}")
+
     async def _on_order_filled(self, order_info):
         """Handle order fill event from OrderManager (WebSocket or REST fallback)."""
         symbol = order_info.symbol
@@ -27,13 +62,8 @@ class GridStrategy(BaseStrategy):
         sz = float(order_info.sz) if order_info.sz else 0
         ordId = order_info.ordId
 
-        # Find grid index by matching price
-        grid_idx = None
-        for i, level in enumerate(self._grid_levels):
-            price = round(round(level / self._grid_tick_size) * self._grid_tick_size, self._grid_tick_decimals)
-            if abs(price - px) < self._grid_tick_size * 0.6:
-                grid_idx = i
-                break
+        # Bug 3: 精确档位索引匹配，容差作为兜底
+        grid_idx = self._find_grid_index(px)
 
         if grid_idx is None:
             return
@@ -118,14 +148,13 @@ class GridStrategy(BaseStrategy):
             if order.symbol != symbol:
                 continue
             px_val = float(order.px) if order.px else 0
-            for i, level in enumerate(self._grid_levels):
-                price = round(round(level / self._grid_tick_size) * self._grid_tick_size, self._grid_tick_decimals)
-                if abs(price - px_val) < self._grid_tick_size * 0.6:
-                    if order.side == "buy":
-                        new_buy[i] = order.ordId
-                    elif order.side == "sell":
-                        new_sell[i] = order.ordId
-                    break
+            # Bug 3: 精确档位索引匹配，容差作为兜底
+            grid_idx = self._find_grid_index(px_val)
+            if grid_idx is not None:
+                if order.side == "buy":
+                    new_buy[grid_idx] = order.ordId
+                elif order.side == "sell":
+                    new_sell[grid_idx] = order.ordId
         self._active_buy_orders = new_buy
         self._active_sell_orders = new_sell
 
@@ -150,11 +179,19 @@ class GridStrategy(BaseStrategy):
                 return
             current_price = float(ticker[0]["last"])
 
+            # Subscribe to WebSocket ticker for real-time price updates.
+            self._latest_price = current_price
+            try:
+                await market_data_service.subscribe_ticker(symbol, self._on_ticker_update)
+            except Exception as e:
+                print(f"[GridStrategy] WS ticker subscribe failed, using REST fallback: {e}")
+
             self.update_status("running")
 
-            # Get initial equity once at start
+            # Get initial equity once at start (use shared cache to reduce API calls)
             try:
-                balances = await self.client.get_balance()
+                from services.strategy_engine import strategy_engine
+                balances = await strategy_engine.get_shared_balance(self.account_id)
                 if balances:
                     self._initial_equity = float(balances.get("totalEq", "0"))
             except Exception:
@@ -206,14 +243,13 @@ class GridStrategy(BaseStrategy):
                     for o in live_orders:
                         if not o.order_id:
                             continue
-                        for i, level in enumerate(grid_levels):
-                            price = round(round(level / tick_size) * tick_size, tick_decimals)
-                            if abs(price - (o.price or 0)) < tick_size * 0.6:
-                                if o.side == "buy":
-                                    self._active_buy_orders[i] = o.order_id
-                                elif o.side == "sell":
-                                    self._active_sell_orders[i] = o.order_id
-                                break
+                        # Bug 3: 精确档位索引匹配，容差作为兜底
+                        grid_idx = self._find_grid_index(float(o.price or 0))
+                        if grid_idx is not None:
+                            if o.side == "buy":
+                                self._active_buy_orders[grid_idx] = o.order_id
+                            elif o.side == "sell":
+                                self._active_sell_orders[grid_idx] = o.order_id
                 finally:
                     db.close()
             except Exception:
@@ -291,6 +327,13 @@ class GridStrategy(BaseStrategy):
         except Exception as e:
             print(f"[GridStrategy] execute error: {e}\n{traceback.format_exc()}")
             self._record_event("error", f"策略执行异常: {e}", {"traceback": traceback.format_exc()})
+            # Unsubscribe from WebSocket ticker if subscription was made.
+            try:
+                symbol = locals().get("symbol", self.params.get("symbol", ""))
+                if symbol:
+                    await market_data_service.unsubscribe_ticker(symbol, self._on_ticker_update)
+            except Exception:
+                pass
             self.update_status("error")
             return
 
@@ -303,12 +346,16 @@ class GridStrategy(BaseStrategy):
                 continue
 
             try:
-                tickers = await self.client.get_ticker(symbol)
-                if not tickers:
-                    await asyncio.sleep(5)
-                    continue
-
-                current_price = float(tickers[0]["last"])
+                # Prefer WebSocket-cached ticker; fall back to REST polling.
+                ws_ticker = market_data_service.get_latest_ticker(symbol)
+                if ws_ticker and ws_ticker.get("last"):
+                    current_price = float(ws_ticker["last"])
+                else:
+                    tickers = await self.client.get_ticker(symbol)
+                    if not tickers:
+                        await asyncio.sleep(5)
+                        continue
+                    current_price = float(tickers[0]["last"])
 
                 # Fallback REST polling every 15 seconds (if WebSocket is not available)
                 now = time.time()
@@ -381,6 +428,12 @@ class GridStrategy(BaseStrategy):
                     continue
 
             await asyncio.sleep(3)
+
+        # Unsubscribe from WebSocket ticker on exit.
+        try:
+            await market_data_service.unsubscribe_ticker(symbol, self._on_ticker_update)
+        except Exception:
+            pass
 
         for _, order_id in {**self._active_buy_orders, **self._active_sell_orders}.items():
             try:

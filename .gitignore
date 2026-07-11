@@ -27,6 +27,9 @@ FlClash-main/
 miner-animation/
 --brand-css
 
+# GitHub workflows (requires workflow scope in token)
+.github/
+
 # Data & config
 backend/data/
 backend/1772848370833.yml

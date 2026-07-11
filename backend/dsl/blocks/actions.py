@@ -332,3 +332,236 @@ async def execute_action(ref: Any, ctx: ExecutionContext) -> None:
         raise ValueError(f"未知动作 kind: {ref.kind}")
     inst = cls(**ref.args)
     await inst.execute(ctx)
+
+
+# —— 风控类 ——
+
+
+async def _get_position_for_symbol(ctx: ExecutionContext, symbol: str) -> dict | None:
+    """从 ctx.client.get_positions() 中匹配 symbol 的持仓 dict，未找到返回 None。"""
+    try:
+        positions = await ctx.client.get_positions()
+    except Exception:
+        return None
+    for pos in positions:
+        inst_id = pos.get("instId") if isinstance(pos, dict) else getattr(pos, "instId", None)
+        if inst_id == symbol:
+            return pos if isinstance(pos, dict) else {"instId": inst_id}
+    return None
+
+
+async def _close_position_market(ctx: ExecutionContext, symbol: str, pos_val: float) -> None:
+    """以市价单全部平仓：多仓卖出、空仓买入。"""
+    side = "sell" if pos_val > 0 else "buy"
+    sz = str(abs(pos_val))
+    await ctx.client.place_order(symbol, side, "market", sz)
+
+
+@action("stop_loss")
+class StopLoss:
+    """止损：持仓盈亏比例低于阈值时全部平仓。"""
+
+    category = "风控"
+    label = "止损"
+    description = "持仓盈亏比例低于阈值时全部平仓（threshold 为小数，如 -0.05 表示 -5%）"
+    param_schema = {
+        "type": "object",
+        "properties": {
+            "threshold": {
+                "type": "number",
+                "label": "止损阈值",
+                "description": "止损盈亏比例阈值（小数，如 -0.05 表示 -5%）",
+            },
+            "symbol": {"type": "string", "label": "交易对", "description": "交易对，默认取 ctx.symbol"},
+        },
+        "required": ["threshold"],
+    }
+    priority = "P1"
+
+    def __init__(self, threshold: float, symbol: str | None = None):
+        self.threshold = float(threshold)
+        self.symbol = symbol
+
+    async def execute(self, ctx: ExecutionContext) -> None:
+        symbol = self.symbol or ctx.symbol
+        pos = await _get_position_for_symbol(ctx, symbol)
+        if not pos:
+            ctx.strategy._record_event(
+                "dsl_info",
+                f"stop_loss: 无持仓 {symbol}，跳过",
+                {"symbol": symbol, "threshold": self.threshold},
+            )
+            return
+        try:
+            pos_val = float(pos.get("pos", "0"))
+        except (ValueError, TypeError):
+            pos_val = 0.0
+        if abs(pos_val) < 1e-9:
+            ctx.strategy._record_event(
+                "dsl_info",
+                f"stop_loss: 持仓为 0 {symbol}，跳过",
+                {"symbol": symbol, "threshold": self.threshold},
+            )
+            return
+        try:
+            upl_ratio = float(pos.get("uplRatio", "0"))
+        except (ValueError, TypeError):
+            upl_ratio = 0.0
+        if upl_ratio < self.threshold:
+            await _close_position_market(ctx, symbol, pos_val)
+            details = {
+                "symbol": symbol,
+                "pos": pos_val,
+                "upl_ratio": upl_ratio,
+                "threshold": self.threshold,
+            }
+            ctx.strategy._record_event(
+                "dsl_action",
+                f"stop_loss: 平仓 {symbol} (uplRatio={upl_ratio} < {self.threshold})",
+                details,
+            )
+        else:
+            ctx.strategy._record_event(
+                "dsl_info",
+                f"stop_loss: 未触发 {symbol} (uplRatio={upl_ratio} >= {self.threshold})",
+                {"symbol": symbol, "upl_ratio": upl_ratio, "threshold": self.threshold},
+            )
+
+
+@action("take_profit")
+class TakeProfit:
+    """止盈：持仓盈亏比例高于阈值时全部平仓。"""
+
+    category = "风控"
+    label = "止盈"
+    description = "持仓盈亏比例高于阈值时全部平仓（threshold 为小数，如 0.1 表示 +10%）"
+    param_schema = {
+        "type": "object",
+        "properties": {
+            "threshold": {
+                "type": "number",
+                "label": "止盈阈值",
+                "description": "止盈盈亏比例阈值（小数，如 0.1 表示 +10%）",
+            },
+            "symbol": {"type": "string", "label": "交易对", "description": "交易对，默认取 ctx.symbol"},
+        },
+        "required": ["threshold"],
+    }
+    priority = "P1"
+
+    def __init__(self, threshold: float, symbol: str | None = None):
+        self.threshold = float(threshold)
+        self.symbol = symbol
+
+    async def execute(self, ctx: ExecutionContext) -> None:
+        symbol = self.symbol or ctx.symbol
+        pos = await _get_position_for_symbol(ctx, symbol)
+        if not pos:
+            ctx.strategy._record_event(
+                "dsl_info",
+                f"take_profit: 无持仓 {symbol}，跳过",
+                {"symbol": symbol, "threshold": self.threshold},
+            )
+            return
+        try:
+            pos_val = float(pos.get("pos", "0"))
+        except (ValueError, TypeError):
+            pos_val = 0.0
+        if abs(pos_val) < 1e-9:
+            ctx.strategy._record_event(
+                "dsl_info",
+                f"take_profit: 持仓为 0 {symbol}，跳过",
+                {"symbol": symbol, "threshold": self.threshold},
+            )
+            return
+        try:
+            upl_ratio = float(pos.get("uplRatio", "0"))
+        except (ValueError, TypeError):
+            upl_ratio = 0.0
+        if upl_ratio > self.threshold:
+            await _close_position_market(ctx, symbol, pos_val)
+            details = {
+                "symbol": symbol,
+                "pos": pos_val,
+                "upl_ratio": upl_ratio,
+                "threshold": self.threshold,
+            }
+            ctx.strategy._record_event(
+                "dsl_action",
+                f"take_profit: 平仓 {symbol} (uplRatio={upl_ratio} > {self.threshold})",
+                details,
+            )
+        else:
+            ctx.strategy._record_event(
+                "dsl_info",
+                f"take_profit: 未触发 {symbol} (uplRatio={upl_ratio} <= {self.threshold})",
+                {"symbol": symbol, "upl_ratio": upl_ratio, "threshold": self.threshold},
+            )
+
+
+# —— 状态管理类 ——
+
+
+@action("set_var")
+class SetVar:
+    """设置状态变量：写入 ctx.kv_state（跨 tick 持久，跨规则共享）。"""
+
+    category = "状态管理"
+    label = "设置变量"
+    description = "设置策略级状态变量（跨 tick 持久，跨规则共享）"
+    param_schema = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "label": "变量名", "description": "变量名"},
+            "value": {"type": "any", "label": "变量值", "description": "变量值（任意类型）"},
+        },
+        "required": ["name", "value"],
+    }
+    priority = "P1"
+
+    def __init__(self, name: str, value: Any = None):
+        self.name = name
+        self.value = value
+
+    async def execute(self, ctx: ExecutionContext) -> None:
+        ctx.set_state(self.name, self.value)
+        ctx.strategy._record_event(
+            "dsl_action",
+            f"set_var: {self.name}={self.value}",
+            {"name": self.name, "value": self.value},
+        )
+
+
+@action("get_var")
+class GetVar:
+    """获取状态变量：从 ctx.kv_state 读取值。
+
+    注意：标准动作接口为 ``execute -> None``，本动作返回变量值以便直接调用时获取；
+    经 execute_action 调度时返回值会被忽略。
+    """
+
+    category = "状态管理"
+    label = "获取变量"
+    description = "获取策略级状态变量的值"
+    param_schema = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "label": "变量名", "description": "变量名"},
+            "default": {"type": "any", "label": "默认值", "description": "变量不存在时的默认值"},
+        },
+        "required": ["name"],
+    }
+    priority = "P1"
+
+    def __init__(self, name: str, default: Any = None):
+        self.name = name
+        self.default = default
+
+    async def execute(self, ctx: ExecutionContext) -> Any:
+        value = ctx.get_state(self.name, self.default)
+        ctx.strategy._record_event(
+            "dsl_action",
+            f"get_var: {self.name}={value}",
+            {"name": self.name, "value": value},
+        )
+        return value

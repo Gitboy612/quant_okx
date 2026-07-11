@@ -1,10 +1,11 @@
-﻿import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { motion } from 'framer-motion'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { listOrders } from '../api/orders'
 import { listInstances } from '../api/strategies'
 import { formatInstId } from '../utils/instId'
 import { TableSkeleton } from '../components/Skeleton'
+import VirtualTable, { type Column } from '../components/VirtualTable'
 import type { Order, StrategyInstance } from '../types'
 
 const STATUS_OPTIONS = [
@@ -12,6 +13,35 @@ const STATUS_OPTIONS = [
   { value: 'live', label: '活跃' },
   { value: 'filled', label: '已成交' },
   { value: 'canceled', label: '已撤销' },
+]
+
+function formatTime(ts: string) {
+  return new Date(ts).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+}
+
+/** Column definitions for VirtualTable (used when a group has > 100 orders) */
+const orderVtColumns: Column<Order>[] = [
+  { key: 'created_at', header: '时间', render: (o) => <span className="text-xs text-[#7B86A2]">{formatTime(o.created_at)}</span> },
+  { key: 'symbol', header: '交易对', render: (o) => <span className="text-xs font-mono">{formatInstId(o.symbol)}</span> },
+  { key: 'side', header: '方向', render: (o) => (
+    <span className={`font-mono text-xs font-medium ${o.side === 'buy' ? 'text-[#00D4AA]' : 'text-[#FF4060]'}`}>
+      {o.side === 'buy' ? '买' : o.side === 'sell' ? '卖' : o.side}
+    </span>
+  ) },
+  { key: 'price', header: '委托价', className: 'text-right', render: (o) => <span className="text-xs font-mono block text-right">{o.price != null ? o.price.toFixed(1) : '-'}</span> },
+  { key: 'quantity', header: '数量', className: 'text-right', render: (o) => <span className="text-xs font-mono block text-right">{o.quantity}</span> },
+  { key: 'fill_px', header: '成交价', className: 'text-right', render: (o) => <span className="text-xs font-mono block text-right text-[#00D4AA]">{o.fill_px != null ? o.fill_px.toFixed(1) : '-'}</span> },
+  { key: 'fill_sz', header: '已成交', className: 'text-right', render: (o) => <span className="text-xs font-mono block text-right">{o.fill_sz != null ? o.fill_sz : o.filled_quantity}</span> },
+  { key: 'fee', header: '手续费', className: 'text-right', render: (o) => <span className="text-xs font-mono block text-right text-[#7B86A2]">{o.fee != null ? o.fee.toFixed(6) : '-'}</span> },
+  { key: 'status', header: '状态', className: 'text-center', render: (o) => (
+    <span className={`text-xs px-1.5 py-0.5 rounded ${
+      o.status === 'filled' ? 'bg-[#00D4AA]/10 text-[#00D4AA]' :
+      o.status === 'canceled' ? 'bg-[#7B86A2]/10 text-[#7B86A2]' :
+      'bg-[#F0A500]/10 text-[#F0A500]'
+    }`}>
+      {o.status === 'filled' ? '已成交' : o.status === 'canceled' ? '已撤销' : o.state || o.status}
+    </span>
+  ) },
 ]
 
 export default function OrdersPage() {
@@ -63,12 +93,9 @@ export default function OrdersPage() {
     })
   }, [orders, instances])
 
-  const formatTime = (ts: string) =>
-    new Date(ts).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })
-
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <h2 className="text-sm font-medium text-[#EDF0F7]">交易记录</h2>
         <div className="flex items-center gap-2">
           <span className="text-xs text-[#7B86A2]">状态筛选</span>
@@ -121,6 +148,11 @@ export default function OrdersPage() {
                 </button>
 
                 {isExpanded && (
+                  group.orders.length > 100 ? (
+                    <div className="border-t border-[rgba(0,212,170,0.08)]">
+                      <VirtualTable columns={orderVtColumns} data={group.orders} keyField="id" height={400} />
+                    </div>
+                  ) : (
                   <div className="border-t border-[rgba(0,212,170,0.08)] overflow-x-auto">
                     <table className="w-full text-sm">
                       <thead>
@@ -171,6 +203,7 @@ export default function OrdersPage() {
                       </tbody>
                     </table>
                   </div>
+                  )
                 )}
               </div>
             )

@@ -64,8 +64,45 @@ class BaseStrategy(ABC):
                 db.commit()
             finally:
                 db.close()
-        except Exception:
-            pass
+        except Exception as e:
+            # Bug 9: 增加 print 兜底，确保异常可见而非静默吞掉
+            print(f"[BaseStrategy] _record_event error: type={event_type} msg={message} err={e}")
+
+        # 异步触发多渠道通知（不阻塞策略主循环）
+        # 只对配置了规则的事件类型触发；无规则时 notify 内部会直接返回 0
+        self._fire_notification(event_type, message, details)
+
+    def _fire_notification(self, event_type: str, message: str, details: dict | None):
+        """异步分发通知，失败不影响策略主循环。
+
+        使用 asyncio.create_task 调度，确保：
+        - 在事件循环中运行时不阻塞调用方
+        - 无事件循环时（如同步上下文调用 _record_event）降级为 fire-and-forget，
+          异常被捕获并打印
+        """
+        try:
+            from services.notification_service import notification_service
+            title = f"[策略#{self.instance_id}] {event_type}"
+            payload = details if isinstance(details, dict) else ({"raw": details} if details else {})
+            # 添加策略上下文，便于通知中定位来源
+            ctx = dict(payload)
+            ctx.setdefault("strategy_instance_id", self.instance_id)
+            if self.account_id is not None:
+                ctx.setdefault("account_id", self.account_id)
+            symbol = self.params.get("symbol") if isinstance(self.params, dict) else None
+            if symbol:
+                ctx.setdefault("symbol", symbol)
+            try:
+                loop = asyncio.get_running_loop()
+                asyncio.create_task(
+                    notification_service.notify(event_type, title, message, ctx)
+                )
+            except RuntimeError:
+                # 无运行中的事件循环：无法 create_task，记录后跳过
+                # （_record_event 多在异步上下文中被调用，此处为兜底）
+                print(f"[BaseStrategy] _fire_notification: 无事件循环，跳过通知 type={event_type}")
+        except Exception as e:
+            print(f"[BaseStrategy] _fire_notification error: type={event_type} err={e}")
 
     @abstractmethod
     async def execute(self):
@@ -117,14 +154,14 @@ class BaseStrategy(ABC):
     def pause(self):
         self._paused = True
         symbol = self.params.get("symbol", "")
-        import asyncio as _asyncio
+        # Bug 6: 检测是否在事件循环中，避免 asyncio.run 与主循环冲突
         try:
-            _asyncio.get_running_loop()
-            _asyncio.ensure_future(self._pause_async(symbol))
+            asyncio.get_running_loop()
+            # 在事件循环中：用 create_task 调度异步清理，不阻塞调用方
+            asyncio.create_task(self._pause_async(symbol))
         except RuntimeError:
-            cancelled = _asyncio.run(self.order_manager.cancel_all(symbol))
-            self._record_event("paused", f"策略已暂停, 撤销 {cancelled} 笔订单")
-            self.record_final_pnl()
+            # 无事件循环：用 asyncio.run 运行完整异步清理（含 record_event / record_final_pnl）
+            asyncio.run(self._pause_async(symbol))
 
     async def _pause_async(self, symbol: str):
         cancelled = await self.order_manager.cancel_all(symbol)
@@ -139,14 +176,12 @@ class BaseStrategy(ABC):
         self._running = False
         self._paused = False
         symbol = self.params.get("symbol", "")
-        import asyncio as _asyncio
+        # Bug 6: 检测是否在事件循环中，避免 asyncio.run 与主循环冲突
         try:
-            _asyncio.get_running_loop()
-            _asyncio.ensure_future(self._stop_async(symbol))
+            asyncio.get_running_loop()
+            asyncio.create_task(self._stop_async(symbol))
         except RuntimeError:
-            cancelled = _asyncio.run(self.order_manager.cancel_all(symbol))
-            self._record_event("stopped", f"策略已停止, 撤销 {cancelled} 笔订单")
-            self.record_final_pnl()
+            asyncio.run(self._stop_async(symbol))
 
     async def _stop_async(self, symbol: str):
         cancelled = await self.order_manager.cancel_all(symbol)

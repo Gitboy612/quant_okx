@@ -2,16 +2,26 @@ import hashlib
 import json
 import logging
 from datetime import datetime, timezone
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+import pydantic
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
 from sqlalchemy.orm import Session
 from database import get_db
+from dsl.schema import QSModelConfig
+from dsl.validator import DSLValidator
 from models.user import User
 from models.strategy import StrategyTemplate, StrategyInstance
 from models.log import OperationLog
 from schemas.strategy import StrategyInstanceCreate, StrategyInstanceUpdate, StrategyTemplateCreate, StrategyTemplateUpdate
 from services.strategy_engine import strategy_engine
 from middleware.auth import get_current_user
+
+
+# 导出文件格式版本（导入时用于兼容性校验）
+EXPORT_VERSION = "1.0"
+# 支持导入的 export_version 白名单（当前仅 1.0）
+SUPPORTED_EXPORT_VERSIONS = {"1.0"}
 
 logger = logging.getLogger(__name__)
 
@@ -239,6 +249,222 @@ def delete_template(
     db.commit()
 
     return {"message": "自定义模板已删除"}
+
+
+# ============================================================
+# 模板导出 / 导入（分享功能）
+# ============================================================
+
+
+def _build_export_payload(template: StrategyTemplate) -> dict:
+    """构造导出 JSON 载荷。
+
+    复用 _serialize_template 中的 qs_model_config 兼容包装逻辑：
+    - 优先使用 qs_model_config
+    - 回退到 dsl_config（自动包装为 QS-Model 结构）
+    - 两者均无时 qs_model_config 为 None（仍可导出，但导入时会被拒绝）
+    """
+    if template.qs_model_config:
+        qs_config = template.qs_model_config
+    elif template.dsl_config:
+        qs_config = {
+            "qs_model_version": "2.0",
+            "meta": {"name": template.name, "base_symbol": ""},
+            "params": {},
+            "logic": template.dsl_config,
+            "risk_filter": None,
+        }
+    else:
+        qs_config = None
+    return {
+        "export_version": EXPORT_VERSION,
+        "exported_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "template": {
+            "name": template.name,
+            "description": template.description,
+            "strategy_type": template.strategy_type,
+            "qs_model_config": qs_config,
+            "default_params": template.default_params,
+            "param_schema": template.param_schema,
+        },
+    }
+
+
+@router.get("/templates/{template_id}/export")
+def export_template(
+    template_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """导出策略模板为 JSON 文件（含完整 QS-Model 配置）。
+
+    响应 Content-Disposition: attachment，触发浏览器下载。
+    文件名：template_{name}.json（name 中的非 ASCII 字符通过 RFC 5987 编码）。
+    """
+    template = db.query(StrategyTemplate).filter(StrategyTemplate.id == template_id).first()
+    if not template:
+        raise HTTPException(status_code=404, detail="策略模板不存在")
+
+    payload = _build_export_payload(template)
+    body = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+
+    # 文件名：template_{name}.json；同时提供 ASCII fallback 与 RFC 5987 编码
+    safe_name = quote(template.name, safe="")
+    filename_ascii = f"template_{template_id}.json"
+    content_disposition = (
+        f"attachment; filename=\"{filename_ascii}\"; "
+        f"filename*=UTF-8''{safe_name}.json"
+    )
+
+    return Response(
+        content=body,
+        media_type="application/json",
+        headers={"Content-Disposition": content_disposition},
+    )
+
+
+@router.post("/templates/import")
+async def import_template(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """导入策略模板（从导出的 JSON 创建新模板）。
+
+    请求体格式（与 export_template 输出一致）：
+        {
+          "export_version": "1.0",
+          "exported_at": "...",
+          "template": {
+            "name": "...",
+            "description": "...",
+            "strategy_type": "...",
+            "qs_model_config": {...},
+            "default_params": {...},
+            "param_schema": {...}
+          }
+        }
+
+    校验：
+    - export_version 必须在 SUPPORTED_EXPORT_VERSIONS 白名单内
+    - template.qs_model_config 必须存在且为合法 QS-Model 四段式结构
+      （meta/params/logic/risk_filter），logic 段交由 DSLValidator 校验
+    - 模板名加 "（导入）" 后缀以避免与现有模板重名
+    - 计算 logic_hash 并落库
+
+    返回：新创建的模板对象（_serialize_template 输出）。
+
+    使用 Request 直接解析 JSON 体（而非 ``body: dict`` 参数注解），
+    以便对非 JSON / 非 dict 请求体统一返回 400 而非 FastAPI 默认 422。
+    """
+    # 1. 解析请求体
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="请求体不是合法的 JSON")
+
+    # 2. 基本结构校验
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="请求体必须为 JSON 对象")
+    export_version = body.get("export_version")
+    if not export_version:
+        raise HTTPException(status_code=400, detail="缺少 export_version 字段")
+    if export_version not in SUPPORTED_EXPORT_VERSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的导出版本: {export_version}，当前支持: {sorted(SUPPORTED_EXPORT_VERSIONS)}",
+        )
+
+    template_data = body.get("template")
+    if not isinstance(template_data, dict):
+        raise HTTPException(status_code=400, detail="缺少 template 字段或格式不正确")
+
+    qs_model_config = template_data.get("qs_model_config")
+    if not isinstance(qs_model_config, dict) or not qs_model_config:
+        raise HTTPException(
+            status_code=400,
+            detail="导入的模板必须包含 qs_model_config（QS-Model 四段式配置）",
+        )
+
+    # 3. QS-Model 结构校验（meta/params/logic/risk_filter 四段）
+    required_sections = ("meta", "params", "logic", "risk_filter")
+    missing = [s for s in required_sections if s not in qs_model_config]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"qs_model_config 缺少必填段: {missing}",
+        )
+
+    try:
+        qs_model = QSModelConfig.model_validate(qs_model_config)
+    except pydantic.ValidationError as e:
+        # 收集全部错误信息以便用户定位
+        msgs = []
+        for err in e.errors():
+            loc = ".".join(str(x) for x in err.get("loc", ()))
+            msgs.append(f"{loc}: {err.get('msg', '校验失败')}" if loc else err.get("msg", "校验失败"))
+        raise HTTPException(
+            status_code=400,
+            detail=f"qs_model_config 结构校验失败: {'; '.join(msgs)}",
+        )
+
+    # 4. logic 段 DSL 静态校验（五层：structure/reference/type/semantic/resource）
+    dsl_result = DSLValidator().validate(qs_model.logic)
+    if not dsl_result.valid:
+        errs = [f"[{e.layer}] {e.path}: {e.message}" for e in dsl_result.errors]
+        raise HTTPException(
+            status_code=400,
+            detail=f"logic 段 DSL 校验失败: {'; '.join(errs)}",
+        )
+
+    # 5. 模板名加后缀避免重名
+    base_name = (template_data.get("name") or "imported").strip()
+    if not base_name:
+        base_name = "imported"
+    import_name = f"{base_name}（导入）"
+
+    # 若加后缀后仍重名，则在末尾追加序号
+    final_name = import_name
+    suffix_idx = 2
+    while db.query(StrategyTemplate).filter(
+        StrategyTemplate.name == final_name,
+        StrategyTemplate.is_custom == True,
+    ).first():
+        final_name = f"{import_name}-{suffix_idx}"
+        suffix_idx += 1
+
+    # 6. 计算 logic_hash（与 create_template 一致的算法）
+    logic_hash = _compute_logic_hash(qs_model_config, None)
+
+    # 7. 落库（导入的模板一律为自定义、非内置）
+    template = StrategyTemplate(
+        name=final_name,
+        strategy_type=template_data.get("strategy_type") or "composable",
+        description=template_data.get("description"),
+        default_params=template_data.get("default_params") or {},
+        param_schema=template_data.get("param_schema"),
+        is_builtin=False,
+        is_custom=True,
+        dsl_config=None,
+        qs_model_config=qs_model_config,
+        logic_hash=logic_hash,
+    )
+    db.add(template)
+    db.commit()
+    db.refresh(template)
+
+    log = OperationLog(
+        user_id=user.id,
+        action="import_strategy_template",
+        target_type="strategy_template",
+        target_id=template.id,
+        detail={"name": final_name, "source_name": base_name, "export_version": export_version},
+        ip_address=request.client.host if request.client else "",
+    )
+    db.add(log)
+    db.commit()
+
+    return _serialize_template(template)
 
 
 @router.get("/instances")

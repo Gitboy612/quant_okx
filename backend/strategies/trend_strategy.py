@@ -1,14 +1,18 @@
 import asyncio
 from strategies.base_strategy import BaseStrategy
+from services.market_data_service import market_data_service
 
 
 class TrendStrategy(BaseStrategy):
     async def validate_params(self) -> bool:
-        required = ["fast_ma_period", "slow_ma_period", "order_qty", "symbol"]
-        for key in required:
-            if key not in self.params:
-                return False
-        if self.params["fast_ma_period"] >= self.params["slow_ma_period"]:
+        # Bug 8: 统一为 fast_period / slow_period，兼容旧参数名 fast_ma_period / slow_ma_period
+        fast_period = self.params.get("fast_period", self.params.get("fast_ma_period"))
+        slow_period = self.params.get("slow_period", self.params.get("slow_ma_period"))
+        if fast_period is None or slow_period is None:
+            return False
+        if "order_qty" not in self.params or "symbol" not in self.params:
+            return False
+        if fast_period >= slow_period:
             return False
         if self.params["order_qty"] <= 0:
             return False
@@ -62,22 +66,41 @@ class TrendStrategy(BaseStrategy):
 
         await self.record_order(symbol, side, "market", px, sz, order_id=order_info.ordId, status="filled")
 
+    def _on_ticker_update(self, ticker_data: dict):
+        """WebSocket ticker callback — update cached latest price."""
+        try:
+            last = ticker_data.get("last")
+            if last:
+                self._latest_price = float(last)
+        except Exception as e:
+            print(f"[TrendStrategy] _on_ticker_update error: {e}")
+
     async def execute(self):
         if not await self.validate_params():
             self.update_status("error")
             return
 
-        fast_period = self.params["fast_ma_period"]
-        slow_period = self.params["slow_ma_period"]
+        # Bug 8: 统一读取 fast_period / slow_period，兼容旧参数名 fast_ma_period / slow_ma_period
+        fast_period = self.params.get("fast_period", self.params["fast_ma_period"])
+        slow_period = self.params.get("slow_period", self.params["slow_ma_period"])
         order_qty = self.params["order_qty"]
         symbol = self.params["symbol"]
 
         last_signal = None
+        consecutive_errors = 0
         self.update_status("running")
 
-        # Get initial equity once at start
+        # Subscribe to WebSocket ticker for real-time price updates.
+        self._latest_price = 0.0
         try:
-            balances = await self.client.get_balance()
+            await market_data_service.subscribe_ticker(symbol, self._on_ticker_update)
+        except Exception as e:
+            print(f"[TrendStrategy] WS ticker subscribe failed, using REST fallback: {e}")
+
+        # Get initial equity once at start (use shared cache to reduce API calls)
+        try:
+            from services.strategy_engine import strategy_engine
+            balances = await strategy_engine.get_shared_balance(self.account_id)
             if balances:
                 self._initial_equity = float(balances.get("totalEq", "0"))
         except Exception:
@@ -138,7 +161,53 @@ class TrendStrategy(BaseStrategy):
                     await self.record_order(symbol, signal, "market", current_price, order_qty)
                     last_signal = signal
 
-            except Exception:
-                pass
+                consecutive_errors = 0
+
+            except Exception as e:
+                # Bug 2: 替换静默 pass，记录错误日志 + 指数退避（参考 grid_strategy 实现）
+                consecutive_errors += 1
+                error_msg = str(e)
+                is_network_error = any(kw in error_msg.lower() for kw in [
+                    "winerror 64", "winerror 10054", "winerror 10060", "winerror 10061",
+                    "timed out", "connection refused", "ssl", "eof", "network", "connect",
+                    "timeout", "unreachable"
+                ])
+
+                if is_network_error:
+                    backoff = min(2 ** consecutive_errors, 60)
+                    print(f"[TrendStrategy] Network error #{consecutive_errors}, backing off {backoff}s: {e}")
+                    self._record_event("error", f"网络异常 (第{consecutive_errors}次)，退避 {backoff}s: {error_msg[:200]}")
+
+                    if consecutive_errors >= 10:
+                        print(f"[TrendStrategy] Too many network errors ({consecutive_errors}), stopping strategy")
+                        self._record_event("error", f"连续网络异常 {consecutive_errors} 次，自动停止策略")
+                        self.record_final_pnl()
+                        self.update_status("stopped")
+                        self._running = False
+                        break
+
+                    await asyncio.sleep(backoff)
+                    continue
+                else:
+                    backoff = min(3 * consecutive_errors, 30)
+                    print(f"[TrendStrategy] Non-network error #{consecutive_errors}, backing off {backoff}s: {e}")
+                    self._record_event("error", f"策略异常 (第{consecutive_errors}次)，退避 {backoff}s: {error_msg[:200]}")
+
+                    if consecutive_errors >= 20:
+                        print(f"[TrendStrategy] Too many non-network errors ({consecutive_errors}), stopping strategy")
+                        self._record_event("error", f"连续策略异常 {consecutive_errors} 次，自动停止策略: {error_msg[:200]}")
+                        self.record_final_pnl()
+                        self.update_status("stopped")
+                        self._running = False
+                        break
+
+                    await asyncio.sleep(backoff)
+                    continue
 
             await asyncio.sleep(60)
+
+        # Unsubscribe from WebSocket ticker on exit.
+        try:
+            await market_data_service.unsubscribe_ticker(symbol, self._on_ticker_update)
+        except Exception:
+            pass

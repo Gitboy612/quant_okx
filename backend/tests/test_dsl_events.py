@@ -16,6 +16,7 @@ from dsl.context import ExecutionContext
 from dsl.schema import EventRef
 from dsl.blocks.events import (  # 导入即注册到 event_registry
     Event, OnTick, OnInterval, OnOrderFilled, OnMarginWarning, OnStrategyError,
+    OnBalanceChange, OnFundingRate, OnPositionClose,
     check_event,
 )
 from services.order_manager import OrderInfo
@@ -172,14 +173,30 @@ def test_on_order_filled_empty_queue_returns_none():
 # on_margin_warning
 # =========================================================================
 
-class FakeClient:
-    """最小化 OKXClient mock，仅实现 get_positions。"""
+class FakePublicAPI:
+    """模拟 OKXClient.public，仅实现 get_funding_rate。"""
 
-    def __init__(self, positions):
-        self._positions = positions
+    def __init__(self, funding_rates: dict | None = None):
+        # {instId: [data, ...]}
+        self._funding_rates = funding_rates or {}
+
+    async def get_funding_rate(self, instId: str):
+        return self._funding_rates.get(instId, [])
+
+
+class FakeClient:
+    """最小化 OKXClient mock，支持 get_positions/get_balance/public.get_funding_rate。"""
+
+    def __init__(self, positions=None, balance=None, funding_rates=None):
+        self._positions = positions if positions is not None else []
+        self._balance = balance if balance is not None else {}
+        self.public = FakePublicAPI(funding_rates)
 
     async def get_positions(self):
         return self._positions
+
+    async def get_balance(self):
+        return self._balance
 
 
 def test_on_margin_warning_triggers_when_ratio_below_threshold():
@@ -257,6 +274,277 @@ def test_on_strategy_error_missing_msg_returns_empty_string():
 
 
 # =========================================================================
+# on_balance_change
+# =========================================================================
+
+def test_on_balance_change_first_check_records_baseline_no_trigger():
+    """首次 check 仅记录基准，不触发。"""
+    ctx = make_ctx(client=FakeClient(balance={"totalEq": "10000"}))
+    ev = OnBalanceChange(threshold=0.01)
+    p = asyncio.run(ev.check(ctx))
+    assert p is None
+    assert ev._last_balance == 10000.0
+
+
+def test_on_balance_change_triggers_when_change_exceeds_threshold():
+    """余额变化超过阈值时触发。"""
+    ev = OnBalanceChange(threshold=0.01)
+    # 第一次：记录基准
+    ctx1 = make_ctx(client=FakeClient(balance={"totalEq": "10000"}))
+    assert asyncio.run(ev.check(ctx1)) is None
+    # 第二次：变化 2% > 1%，触发
+    ctx2 = make_ctx(client=FakeClient(balance={"totalEq": "10200"}))
+    p = asyncio.run(ev.check(ctx2))
+    assert p is not None
+    assert p["old_balance"] == 10000.0
+    assert p["new_balance"] == 10200.0
+    assert abs(p["change_ratio"] - 0.02) < 1e-9
+    assert p["threshold"] == 0.01
+
+
+def test_on_balance_change_no_trigger_when_change_below_threshold():
+    """余额变化未超过阈值时不触发。"""
+    ev = OnBalanceChange(threshold=0.01)
+    ctx1 = make_ctx(client=FakeClient(balance={"totalEq": "10000"}))
+    asyncio.run(ev.check(ctx1))
+    # 变化 0.5% < 1%，不触发
+    ctx2 = make_ctx(client=FakeClient(balance={"totalEq": "10050"}))
+    p = asyncio.run(ev.check(ctx2))
+    assert p is None
+    assert ev._last_balance == 10050.0
+
+
+def test_on_balance_change_triggers_on_decrease():
+    """余额减少超过阈值时也触发。"""
+    ev = OnBalanceChange(threshold=0.01)
+    ctx1 = make_ctx(client=FakeClient(balance={"totalEq": "10000"}))
+    asyncio.run(ev.check(ctx1))
+    # 减少 3% > 1%，触发
+    ctx2 = make_ctx(client=FakeClient(balance={"totalEq": "9700"}))
+    p = asyncio.run(ev.check(ctx2))
+    assert p is not None
+    assert p["old_balance"] == 10000.0
+    assert p["new_balance"] == 9700.0
+    assert abs(p["change_ratio"] - 0.03) < 1e-9
+
+
+def test_on_balance_change_default_threshold():
+    """默认 threshold=0.01。"""
+    ev = OnBalanceChange()
+    assert ev.threshold == 0.01
+
+
+def test_on_balance_change_empty_balance_returns_none():
+    """get_balance 返回空时返回 None。"""
+    ctx = make_ctx(client=FakeClient(balance={}))
+    ev = OnBalanceChange()
+    p = asyncio.run(ev.check(ctx))
+    assert p is None
+
+
+def test_on_balance_change_zero_baseline_to_nonzero_triggers():
+    """上次余额为 0，当前非 0 时触发（绝对变化判断）。"""
+    ev = OnBalanceChange(threshold=0.01)
+    ctx1 = make_ctx(client=FakeClient(balance={"totalEq": "0"}))
+    asyncio.run(ev.check(ctx1))  # 记录基准 0
+    ctx2 = make_ctx(client=FakeClient(balance={"totalEq": "100"}))
+    p = asyncio.run(ev.check(ctx2))
+    assert p is not None
+    assert p["old_balance"] == 0.0
+    assert p["new_balance"] == 100.0
+
+
+# =========================================================================
+# on_funding_rate
+# =========================================================================
+
+def test_on_funding_rate_triggers_when_rate_exceeds_threshold():
+    """资金费率超过阈值时触发。"""
+    funding_rates = {"BTC-USDT-SWAP": [{"fundingRate": "0.002", "nextFundingTime": "1700000000000"}]}
+    ctx = make_ctx(client=FakeClient(funding_rates=funding_rates), symbol="BTC-USDT-SWAP")
+    ev = OnFundingRate(threshold=0.001)
+    p = asyncio.run(ev.check(ctx))
+    assert p is not None
+    assert p["symbol"] == "BTC-USDT-SWAP"
+    assert p["funding_rate"] == 0.002
+    assert p["threshold"] == 0.001
+    assert p["next_funding_time"] == "1700000000000"
+
+
+def test_on_funding_rate_no_trigger_when_rate_below_threshold():
+    """资金费率未超过阈值时不触发。"""
+    funding_rates = {"BTC-USDT-SWAP": [{"fundingRate": "0.0005", "nextFundingTime": ""}]}
+    ctx = make_ctx(client=FakeClient(funding_rates=funding_rates), symbol="BTC-USDT-SWAP")
+    ev = OnFundingRate(threshold=0.001)
+    p = asyncio.run(ev.check(ctx))
+    assert p is None
+
+
+def test_on_funding_rate_negative_rate_triggers_on_abs():
+    """负费率按绝对值判断，超过阈值也触发。"""
+    funding_rates = {"BTC-USDT-SWAP": [{"fundingRate": "-0.0015", "nextFundingTime": ""}]}
+    ctx = make_ctx(client=FakeClient(funding_rates=funding_rates), symbol="BTC-USDT-SWAP")
+    ev = OnFundingRate(threshold=0.001)
+    p = asyncio.run(ev.check(ctx))
+    assert p is not None
+    assert p["funding_rate"] == -0.0015
+
+
+def test_on_funding_rate_non_swap_returns_none():
+    """非 swap 合约（现货）直接返回 None。"""
+    ctx = make_ctx(client=FakeClient(), symbol="BTC-USDT")
+    ev = OnFundingRate(threshold=0.001)
+    p = asyncio.run(ev.check(ctx))
+    assert p is None
+
+
+def test_on_funding_rate_empty_data_returns_none():
+    """费率数据为空时返回 None。"""
+    ctx = make_ctx(client=FakeClient(funding_rates={}), symbol="BTC-USDT-SWAP")
+    ev = OnFundingRate(threshold=0.001)
+    p = asyncio.run(ev.check(ctx))
+    assert p is None
+
+
+def test_on_funding_rate_default_threshold():
+    """默认 threshold=0.001。"""
+    ev = OnFundingRate()
+    assert ev.threshold == 0.001
+
+
+def test_on_funding_rate_uses_param_symbol_over_ctx():
+    """参数 symbol 优先于 ctx.symbol。"""
+    funding_rates = {"ETH-USDT-SWAP": [{"fundingRate": "0.002", "nextFundingTime": ""}]}
+    ctx = make_ctx(client=FakeClient(funding_rates=funding_rates), symbol="BTC-USDT-SWAP")
+    ev = OnFundingRate(symbol="ETH-USDT-SWAP", threshold=0.001)
+    p = asyncio.run(ev.check(ctx))
+    assert p is not None
+    assert p["symbol"] == "ETH-USDT-SWAP"
+
+
+# =========================================================================
+# on_position_close
+# =========================================================================
+
+def test_on_position_close_first_check_records_baseline_no_trigger():
+    """首次 check 仅记录基准，不触发。"""
+    positions = [{"instId": "BTC-USDT-SWAP", "pos": "1.5"}]
+    ctx = make_ctx(client=FakeClient(positions=positions), symbol="BTC-USDT-SWAP")
+    ev = OnPositionClose(symbol="BTC-USDT-SWAP")
+    p = asyncio.run(ev.check(ctx))
+    assert p is None
+    assert ev._last_positions.get("BTC-USDT-SWAP") == 1.5
+
+
+def test_on_position_close_triggers_when_position_becomes_zero():
+    """持仓从非零变为零时触发。"""
+    ev = OnPositionClose(symbol="BTC-USDT-SWAP")
+    # 第一次：有持仓
+    ctx1 = make_ctx(
+        client=FakeClient(positions=[{"instId": "BTC-USDT-SWAP", "pos": "1.5"}]),
+        symbol="BTC-USDT-SWAP",
+    )
+    asyncio.run(ev.check(ctx1))
+    # 第二次：持仓归零
+    ctx2 = make_ctx(
+        client=FakeClient(positions=[{"instId": "BTC-USDT-SWAP", "pos": "0"}]),
+        symbol="BTC-USDT-SWAP",
+    )
+    p = asyncio.run(ev.check(ctx2))
+    assert p is not None
+    assert "BTC-USDT-SWAP" in p["symbols"]
+    assert p["symbol"] == "BTC-USDT-SWAP"
+
+
+def test_on_position_close_triggers_when_position_disappears():
+    """持仓从 positions 列表中消失也触发平仓。"""
+    ev = OnPositionClose(symbol="BTC-USDT-SWAP")
+    ctx1 = make_ctx(
+        client=FakeClient(positions=[{"instId": "BTC-USDT-SWAP", "pos": "1.5"}]),
+        symbol="BTC-USDT-SWAP",
+    )
+    asyncio.run(ev.check(ctx1))
+    # 持仓完全消失（不在列表中）
+    ctx2 = make_ctx(
+        client=FakeClient(positions=[]),
+        symbol="BTC-USDT-SWAP",
+    )
+    p = asyncio.run(ev.check(ctx2))
+    assert p is not None
+    assert "BTC-USDT-SWAP" in p["symbols"]
+
+
+def test_on_position_close_no_trigger_when_position_still_open():
+    """持仓仍存在时不触发。"""
+    ev = OnPositionClose(symbol="BTC-USDT-SWAP")
+    ctx1 = make_ctx(
+        client=FakeClient(positions=[{"instId": "BTC-USDT-SWAP", "pos": "1.5"}]),
+        symbol="BTC-USDT-SWAP",
+    )
+    asyncio.run(ev.check(ctx1))
+    ctx2 = make_ctx(
+        client=FakeClient(positions=[{"instId": "BTC-USDT-SWAP", "pos": "1.0"}]),
+        symbol="BTC-USDT-SWAP",
+    )
+    p = asyncio.run(ev.check(ctx2))
+    assert p is None
+
+
+def test_on_position_close_no_trigger_when_zero_to_zero():
+    """持仓从零到零不触发。"""
+    ev = OnPositionClose(symbol="BTC-USDT-SWAP")
+    ctx1 = make_ctx(
+        client=FakeClient(positions=[{"instId": "BTC-USDT-SWAP", "pos": "0"}]),
+        symbol="BTC-USDT-SWAP",
+    )
+    asyncio.run(ev.check(ctx1))
+    ctx2 = make_ctx(
+        client=FakeClient(positions=[]),
+        symbol="BTC-USDT-SWAP",
+    )
+    p = asyncio.run(ev.check(ctx2))
+    assert p is None
+
+
+def test_on_position_close_no_symbol_triggers_for_any_closed():
+    """无 symbol 过滤时，任意 symbol 平仓都触发。"""
+    ev = OnPositionClose()
+    ctx1 = make_ctx(
+        client=FakeClient(positions=[
+            {"instId": "BTC-USDT-SWAP", "pos": "1.0"},
+            {"instId": "ETH-USDT-SWAP", "pos": "2.0"},
+        ]),
+        symbol="",  # 显式无 symbol 过滤
+    )
+    asyncio.run(ev.check(ctx1))
+    # ETH 平仓，BTC 仍持有
+    ctx2 = make_ctx(
+        client=FakeClient(positions=[{"instId": "BTC-USDT-SWAP", "pos": "1.0"}]),
+        symbol="",
+    )
+    p = asyncio.run(ev.check(ctx2))
+    assert p is not None
+    assert "ETH-USDT-SWAP" in p["symbols"]
+
+
+def test_on_position_close_uses_ctx_symbol_when_no_param():
+    """无参数 symbol 时使用 ctx.symbol。"""
+    ev = OnPositionClose()
+    ctx1 = make_ctx(
+        client=FakeClient(positions=[{"instId": "BTC-USDT-SWAP", "pos": "1.0"}]),
+        symbol="BTC-USDT-SWAP",
+    )
+    asyncio.run(ev.check(ctx1))
+    ctx2 = make_ctx(
+        client=FakeClient(positions=[]),
+        symbol="BTC-USDT-SWAP",
+    )
+    p = asyncio.run(ev.check(ctx2))
+    assert p is not None
+    assert "BTC-USDT-SWAP" in p["symbols"]
+
+
+# =========================================================================
 # check_event 便捷函数
 # =========================================================================
 
@@ -279,10 +567,11 @@ def test_check_event_helper_unknown_kind_raises():
 # =========================================================================
 
 def test_all_p0_events_registered():
-    """五个 P0 事件均注册到 event_registry。"""
+    """八个 P0 事件均注册到 event_registry。"""
     from dsl.registry import event_registry
     for kind in ("on_tick", "on_interval", "on_order_filled",
-                 "on_margin_warning", "on_strategy_error"):
+                 "on_margin_warning", "on_strategy_error",
+                 "on_balance_change", "on_funding_rate", "on_position_close"):
         assert kind in event_registry, f"{kind} 未注册"
         cls = event_registry.get(kind)
         assert getattr(cls, "priority", None) == "P0", f"{kind} priority 非 P0"

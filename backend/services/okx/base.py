@@ -81,6 +81,10 @@ class OKXBaseClient:
         self._private_limiter = RateLimiter(max_calls=60, period_seconds=2.0)
         self._client_lock = asyncio.Lock()
 
+        # 限流配额跟踪（从响应头更新）
+        self._rate_limit_remaining: int | None = None
+        self._rate_limit_limit: int | None = None
+
     async def _ensure_synced(self):
         if not OKXBaseClient._synced:
             await self._sync_time()
@@ -142,6 +146,31 @@ class OKXBaseClient:
                 request_body=detail,
                 response_body="",
             )
+        except Exception:
+            pass
+
+    def _update_rate_limit_from_headers(self, resp):
+        """从响应头解析并更新限流配额状态。
+
+        OKX V5 API 在响应头中返回：
+          - x-ratelimit-remaining: 剩余可用请求次数
+          - x-ratelimit-limit: 配额上限
+        当剩余配额低于上限 20% 时记录警告日志。
+        """
+        try:
+            remaining = resp.headers.get("x-ratelimit-remaining")
+            limit = resp.headers.get("x-ratelimit-limit")
+            if remaining is not None:
+                self._rate_limit_remaining = int(remaining)
+            if limit is not None:
+                self._rate_limit_limit = int(limit)
+            # 配额低于 20% 时记录警告
+            if self._rate_limit_limit and self._rate_limit_remaining is not None:
+                if self._rate_limit_limit > 0:
+                    pct = self._rate_limit_remaining / self._rate_limit_limit
+                    if pct < 0.2:
+                        self._log_system("RATE_LIMIT_WARN",
+                                         f"API 限流配额不足: remaining={self._rate_limit_remaining} limit={self._rate_limit_limit} pct={pct:.1%}")
         except Exception:
             pass
 
@@ -282,6 +311,8 @@ class OKXBaseClient:
                 resp = await self._client.request(
                     method, url, headers=headers, content=body_str if body_str else None
                 )
+                # 从响应头更新限流配额状态
+                self._update_rate_limit_from_headers(resp)
                 raw_text = resp.text.strip()
                 if not raw_text:
                     content_type = resp.headers.get("content-type", "unknown")

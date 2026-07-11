@@ -121,6 +121,9 @@ class ComposableStrategy(BaseStrategy):
         # 当日已实现盈亏基线（按 UTC 日期重置，用于 daily_max_loss 检查）
         self._daily_pnl_baseline: float = 0.0
         self._daily_reset_date: str = ""
+        # Bug 5: 账户权益缓存（5 秒过期），避免风控/下单/持仓估值重复调用 API
+        self._cached_equity: float = 0.0
+        self._cached_equity_ts: float = 0.0
         # —— 主循环网络韧性（Task 5）——
         # 连续网络错误计数：达到 _max_consecutive_errors 后自动停止
         self._consecutive_errors: int = 0
@@ -299,6 +302,10 @@ class ComposableStrategy(BaseStrategy):
         # 6. 启动：标记运行、刷新最新价、构建初始 ctx、挂初始网格、绑定事件
         self._running = True
         self._paused = False
+
+        # Bug 4: 恢复 realized_pnl 与 daily_pnl_baseline，避免重启后风控基线丢失
+        self._restore_realized_pnl_from_db()
+        self._load_daily_baseline()
 
         symbol = self._get_symbol()
         await self._refresh_price(symbol)
@@ -858,15 +865,25 @@ class ComposableStrategy(BaseStrategy):
     # ------------------------------------------------------------
 
     async def _get_account_equity(self) -> float:
-        """获取账户总权益。失败返回 0。"""
+        """获取账户总权益（Bug 5: 5 秒缓存，避免每 tick 重复调用 API）。
+
+        风控检查 / 下单风控 / 持仓估值复用同一缓存值，缓存过期后刷新。
+        失败时返回上次缓存值（若有），避免返回 0 误触发风控。
+        """
+        now = time.time()
+        if self._cached_equity_ts > 0 and (now - self._cached_equity_ts) < 5.0:
+            return self._cached_equity
         try:
             balance = await self.client.get_balance()
             data = balance.get("data", []) if isinstance(balance, dict) else []
             if data:
-                return float(data[0].get("totalEq", 0) or 0)
+                equity = float(data[0].get("totalEq", 0) or 0)
+                self._cached_equity = equity
+                self._cached_equity_ts = now
+                return equity
         except Exception:
             pass
-        return 0.0
+        return self._cached_equity
 
     async def _get_unrealized_pnl_ratio(
         self, ctx: ExecutionContext
@@ -924,4 +941,86 @@ class ComposableStrategy(BaseStrategy):
         if today != self._daily_reset_date:
             self._daily_reset_date = today
             self._daily_pnl_baseline = self._realized_pnl
+            # Bug 4: 日期切换时持久化新基线，避免重启丢失
+            self._save_daily_baseline()
         return self._realized_pnl - self._daily_pnl_baseline
+
+    # ------------------------------------------------------------
+    # Bug 4: daily_pnl_baseline 持久化（system_settings 表）
+    # ------------------------------------------------------------
+
+    def _daily_baseline_setting_key(self) -> str:
+        return f"composable_daily_pnl_baseline_{self.instance_id}"
+
+    def _restore_realized_pnl_from_db(self):
+        """从最新 PnlRecord 恢复已实现盈亏（重启后），与 daily 基线配合使用。"""
+        try:
+            from models.pnl import PnlRecord
+            db = self.db_session_factory()
+            try:
+                latest_pnl = db.query(PnlRecord).filter(
+                    PnlRecord.strategy_instance_id == self.instance_id
+                ).order_by(PnlRecord.recorded_at.desc()).first()
+                if latest_pnl:
+                    self.restore_realized_pnl(latest_pnl.realized_pnl or 0)
+            finally:
+                db.close()
+        except Exception:
+            pass
+
+    def _load_daily_baseline(self):
+        """Bug 4: 从 system_settings 表恢复 daily_pnl_baseline。
+
+        启动时读取持久化的基线：若存储日期 == 当日则直接恢复；
+        否则（跨天或首次启动）用当前 realized_pnl 重置并写回。
+        """
+        from datetime import datetime, timezone
+        try:
+            from models.system_settings import SystemSetting
+            db = self.db_session_factory()
+            try:
+                s = db.query(SystemSetting).filter(
+                    SystemSetting.key == self._daily_baseline_setting_key()
+                ).first()
+                if s and s.value:
+                    data = json.loads(s.value)
+                    stored_date = data.get("date", "")
+                    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                    if stored_date == today:
+                        self._daily_pnl_baseline = float(data.get("baseline", 0.0))
+                        self._daily_reset_date = stored_date
+                        return
+                # 跨天或无记录：重置基线
+                self._daily_reset_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                self._daily_pnl_baseline = self._realized_pnl
+                self._save_daily_baseline()
+            finally:
+                db.close()
+        except Exception as e:
+            self._record_event("warn", f"恢复 daily_pnl_baseline 失败: {e}")
+
+    def _save_daily_baseline(self):
+        """Bug 4: 持久化 daily_pnl_baseline 到 system_settings 表。"""
+        from datetime import datetime, timezone
+        try:
+            from models.system_settings import SystemSetting
+            db = self.db_session_factory()
+            try:
+                value = json.dumps({
+                    "date": self._daily_reset_date,
+                    "baseline": self._daily_pnl_baseline,
+                })
+                s = db.query(SystemSetting).filter(
+                    SystemSetting.key == self._daily_baseline_setting_key()
+                ).first()
+                if s:
+                    s.value = value
+                    s.updated_at = datetime.now(timezone.utc)
+                else:
+                    s = SystemSetting(key=self._daily_baseline_setting_key(), value=value)
+                    db.add(s)
+                db.commit()
+            finally:
+                db.close()
+        except Exception:
+            pass

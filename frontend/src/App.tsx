@@ -12,6 +12,9 @@ import LogsPage from './pages/LogsPage'
 import ApiLogsPage from './pages/ApiLogsPage'
 import MonitoringPage from './pages/MonitoringPage'
 import SettingsPage from './pages/SettingsPage'
+import BacktestPage from './pages/BacktestPage'
+import AnalyticsPage from './pages/AnalyticsPage'
+import NotificationsPage from './pages/NotificationsPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth()
@@ -87,6 +90,9 @@ function AnimatedRoutes() {
           <Route path="logs" element={<PageCard><LogsPage /></PageCard>} />
           <Route path="api-logs" element={<PageCard><ApiLogsPage /></PageCard>} />
           <Route path="monitoring" element={<PageCard><MonitoringPage /></PageCard>} />
+          <Route path="backtest" element={<PageCard><BacktestPage /></PageCard>} />
+          <Route path="analytics" element={<PageCard><AnalyticsPage /></PageCard>} />
+          <Route path="notifications" element={<PageCard><NotificationsPage /></PageCard>} />
           <Route path="settings" element={<PageCard><SettingsPage /></PageCard>} />
         </Route>
       </Routes>

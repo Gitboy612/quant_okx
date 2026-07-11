@@ -224,3 +224,143 @@ class NotCondition:
 
     async def evaluate(self, ctx: ExecutionContext) -> bool:
         return not await evaluate_condition(self.condition_ref, ctx)
+
+
+# ============================ 交叉类 ============================
+
+
+def _cross_state_key(prefix: str, ref: IndicatorRef) -> str:
+    """生成交叉条件在 kv_state 中的缓存键（按指标 kind+args 区分）。"""
+    args_key = tuple(sorted(ref.args.items()))
+    return f"{prefix}:{ref.kind}:{args_key}"
+
+
+@condition("cross_above")
+class CrossAbove:
+    """指标 A 上穿指标 B（前一周 A<B，当前 A>B）。
+
+    通过 ctx.kv_state 缓存上一 tick 的指标值，跨 tick 检测穿越。
+    首次执行无 prev 数据时返回 False。
+    """
+
+    category = "交叉"
+    label = "上穿"
+    display_template = "{indicator_a} 上穿 {indicator_b}"
+    description = "指标 A 上穿指标 B（前一周 A<B，当前 A>B）"
+    input_type = "bool"
+    priority = "P1"
+    param_schema = {
+        "indicator_a": {"type": "object", "required": True, "description": "指标 A 引用 {kind, args}"},
+        "indicator_b": {"type": "object", "required": True, "description": "指标 B 引用 {kind, args}"},
+    }
+
+    def __init__(self, indicator_a: dict, indicator_b: dict):
+        self.indicator_a_ref = IndicatorRef(**indicator_a)
+        self.indicator_b_ref = IndicatorRef(**indicator_b)
+
+    async def evaluate(self, ctx: ExecutionContext) -> bool:
+        curr_a = float(await _resolve_indicator_value(self.indicator_a_ref, ctx))
+        curr_b = float(await _resolve_indicator_value(self.indicator_b_ref, ctx))
+        key_a = _cross_state_key("cross_above:prev_a", self.indicator_a_ref)
+        key_b = _cross_state_key("cross_above:prev_b", self.indicator_b_ref)
+        prev_a = ctx.get_state(key_a)
+        prev_b = ctx.get_state(key_b)
+        # 更新当前值供下一 tick 使用
+        ctx.set_state(key_a, curr_a)
+        ctx.set_state(key_b, curr_b)
+        # 首次执行无 prev 数据，不算穿越
+        if prev_a is None or prev_b is None:
+            return False
+        return float(prev_a) < float(prev_b) and curr_a > curr_b
+
+
+@condition("cross_below")
+class CrossBelow:
+    """指标 A 下穿指标 B（前一周 A>B，当前 A<B）。
+
+    通过 ctx.kv_state 缓存上一 tick 的指标值，跨 tick 检测穿越。
+    首次执行无 prev 数据时返回 False。
+    """
+
+    category = "交叉"
+    label = "下穿"
+    display_template = "{indicator_a} 下穿 {indicator_b}"
+    description = "指标 A 下穿指标 B（前一周 A>B，当前 A<B）"
+    input_type = "bool"
+    priority = "P1"
+    param_schema = {
+        "indicator_a": {"type": "object", "required": True, "description": "指标 A 引用 {kind, args}"},
+        "indicator_b": {"type": "object", "required": True, "description": "指标 B 引用 {kind, args}"},
+    }
+
+    def __init__(self, indicator_a: dict, indicator_b: dict):
+        self.indicator_a_ref = IndicatorRef(**indicator_a)
+        self.indicator_b_ref = IndicatorRef(**indicator_b)
+
+    async def evaluate(self, ctx: ExecutionContext) -> bool:
+        curr_a = float(await _resolve_indicator_value(self.indicator_a_ref, ctx))
+        curr_b = float(await _resolve_indicator_value(self.indicator_b_ref, ctx))
+        key_a = _cross_state_key("cross_below:prev_a", self.indicator_a_ref)
+        key_b = _cross_state_key("cross_below:prev_b", self.indicator_b_ref)
+        prev_a = ctx.get_state(key_a)
+        prev_b = ctx.get_state(key_b)
+        ctx.set_state(key_a, curr_a)
+        ctx.set_state(key_b, curr_b)
+        if prev_a is None or prev_b is None:
+            return False
+        return float(prev_a) > float(prev_b) and curr_a < curr_b
+
+
+# ============================ 区间类 ============================
+
+
+@condition("in_range")
+class InRange:
+    """指标值在区间 [lower, upper] 内。"""
+
+    category = "区间"
+    label = "在区间内"
+    display_template = "{indicator} 在 {lower} 到 {upper} 之间"
+    description = "指标值落在闭区间 [lower, upper] 内"
+    input_type = "bool"
+    priority = "P1"
+    param_schema = {
+        "indicator": {"type": "object", "required": True, "description": "指标引用 {kind, args}"},
+        "lower": {"type": "number", "required": True, "label": "下限", "description": "区间下限"},
+        "upper": {"type": "number", "required": True, "label": "上限", "description": "区间上限"},
+    }
+
+    def __init__(self, indicator: dict, lower: float, upper: float):
+        self.indicator_ref = IndicatorRef(**indicator)
+        self.lower = float(lower)
+        self.upper = float(upper)
+
+    async def evaluate(self, ctx: ExecutionContext) -> bool:
+        value = float(await _resolve_indicator_value(self.indicator_ref, ctx))
+        return self.lower <= value <= self.upper
+
+
+@condition("out_range")
+class OutRange:
+    """指标值在区间 [lower, upper] 外。"""
+
+    category = "区间"
+    label = "在区间外"
+    display_template = "{indicator} 不在 {lower} 到 {upper} 之间"
+    description = "指标值落在闭区间 [lower, upper] 外"
+    input_type = "bool"
+    priority = "P1"
+    param_schema = {
+        "indicator": {"type": "object", "required": True, "description": "指标引用 {kind, args}"},
+        "lower": {"type": "number", "required": True, "label": "下限", "description": "区间下限"},
+        "upper": {"type": "number", "required": True, "label": "上限", "description": "区间上限"},
+    }
+
+    def __init__(self, indicator: dict, lower: float, upper: float):
+        self.indicator_ref = IndicatorRef(**indicator)
+        self.lower = float(lower)
+        self.upper = float(upper)
+
+    async def evaluate(self, ctx: ExecutionContext) -> bool:
+        value = float(await _resolve_indicator_value(self.indicator_ref, ctx))
+        return value < self.lower or value > self.upper

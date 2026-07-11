@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from database import SessionLocal
 from services.okx_client import OKXClient
@@ -44,6 +45,10 @@ class StrategyEngine:
     _account_clients: dict[str, OKXClient] = {}
     _pnl_sampling_task: asyncio.Task | None = None
     _last_heartbeat_ts: dict[int, float] = {}
+    # 同账户共享缓存：account_id -> (timestamp, data)，5 秒内复用
+    _shared_balance_cache: dict[str, tuple[float, dict]] = {}
+    _shared_positions_cache: dict[str, tuple[float, list]] = {}
+    _shared_cache_ttl: float = 5.0
     _strategy_map = {
         "grid": GridStrategy,
         "trend": TrendStrategy,
@@ -64,6 +69,52 @@ class StrategyEngine:
             _, strategy = entry
             return strategy.client
         return None
+
+    async def get_shared_balance(self, account_id: int | str) -> dict:
+        """获取同账户共享的余额缓存，5 秒内复用。
+
+        同账户下多个策略实例共享余额查询结果，减少 OKX API 调用。
+        缓存失败时回退到直接查询或返回过期缓存，不影响策略独立执行。
+        """
+        key = str(account_id)
+        now = time.time()
+        cached = self._shared_balance_cache.get(key)
+        if cached and (now - cached[0] < self._shared_cache_ttl):
+            return cached[1]
+        client = self._account_clients.get(key)
+        if client is None:
+            # 账户未缓存 client，回退到过期缓存或空
+            return cached[1] if cached else {}
+        try:
+            balance = await client.get_balance()
+            self._shared_balance_cache[key] = (now, balance)
+            return balance
+        except Exception as e:
+            logger.error(f"get_shared_balance error for account {key}: {e}")
+            # 查询失败：回退到过期缓存或空，不抛出以隔离策略
+            return cached[1] if cached else {}
+
+    async def get_shared_positions(self, account_id: int | str) -> list:
+        """获取同账户共享的持仓缓存，5 秒内复用。
+
+        同账户下多个策略实例共享持仓查询结果，减少 OKX API 调用。
+        缓存失败时回退到直接查询或返回过期缓存，不影响策略独立执行。
+        """
+        key = str(account_id)
+        now = time.time()
+        cached = self._shared_positions_cache.get(key)
+        if cached and (now - cached[0] < self._shared_cache_ttl):
+            return cached[1]
+        client = self._account_clients.get(key)
+        if client is None:
+            return cached[1] if cached else []
+        try:
+            positions = await client.get_positions()
+            self._shared_positions_cache[key] = (now, positions)
+            return positions
+        except Exception as e:
+            logger.error(f"get_shared_positions error for account {key}: {e}")
+            return cached[1] if cached else []
 
     def start_pnl_sampling(self):
         """启动 PnL 采样后台任务（若未运行或已完成则创建新任务）。"""
@@ -178,6 +229,8 @@ class StrategyEngine:
             self._pnl_sampling_task = None
         clients = list(self._account_clients.values())
         self._account_clients.clear()
+        self._shared_balance_cache.clear()
+        self._shared_positions_cache.clear()
         for client in clients:
             try:
                 await client.aclose()

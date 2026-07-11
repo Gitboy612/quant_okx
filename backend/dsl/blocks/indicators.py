@@ -40,6 +40,35 @@ def _window_to_bar(window: str) -> str:
     return f"{num}{mapping.get(unit, unit)}"
 
 
+def _ema_series(values: list[float], period: int) -> list[float]:
+    """计算 EMA 序列（以首个值为种子，period 仅决定平滑系数）。
+
+    返回与 values 等长的 EMA 序列；空输入返回空列表。
+    """
+    if not values or period <= 0:
+        return []
+    k = 2.0 / (period + 1)
+    ema_values = [values[0]]
+    for v in values[1:]:
+        ema_values.append(v * k + ema_values[-1] * (1.0 - k))
+    return ema_values
+
+
+async def _fetch_closes(ctx: ExecutionContext, symbol: str, bar: str, limit: int) -> list[float]:
+    """拉取 K 线并返回 close 序列（旧→新），失败或数据不足返回空列表。"""
+    try:
+        candles = await ctx.client.get_candles(symbol, bar=bar, limit=str(limit))
+    except Exception:
+        return []
+    if not candles:
+        return []
+    candles = list(reversed(candles))  # OKX 返回最新在前，reverse 为旧→新
+    try:
+        return [float(c[4]) for c in candles]
+    except (IndexError, ValueError, TypeError):
+        return []
+
+
 # ============================================================
 # 行情·价格
 # ============================================================
@@ -356,3 +385,245 @@ class UnrealizedPnl:
                     return 0.0
         # 无持仓，P0 简化为 0.0
         return 0.0
+
+
+# ============================================================
+# 行情·技术指标（P1 扩展）
+# ============================================================
+
+_WINDOW_OPTIONS = ["1m", "5m", "15m", "1h", "4h", "1d"]
+_WINDOW_OPTION_LABELS = ["1分钟", "5分钟", "15分钟", "1小时", "4小时", "1天"]
+
+
+def _window_param_schema(description: str = "K线时间窗口") -> dict:
+    """构造标准 window 参数 schema（含 options / option_labels / default）。"""
+    return {
+        "type": "select",
+        "label": "时间窗口",
+        "required": True,
+        "options": _WINDOW_OPTIONS,
+        "option_labels": _WINDOW_OPTION_LABELS,
+        "default": "1h",
+        "description": description,
+    }
+
+
+@indicator("macd")
+class MACD:
+    """MACD 指标：返回 MACD 柱状值（2*(DIF-DEA)）。
+
+    DIF = EMA(close, fast) - EMA(close, slow)
+    DEA = EMA(DIF, signal)
+    MACD 柱 = 2 * (DIF - DEA)
+    """
+
+    category = "行情·技术指标"
+    label = "MACD"
+    description = "计算 MACD 柱状值（2*(DIF-DEA)）"
+    output_type = float
+    priority = "P1"
+    param_schema = {
+        "symbol": {"type": "string", "label": "交易对", "required": True, "description": "交易对"},
+        "period_fast": {"type": "integer", "label": "快线周期", "required": True, "default": 12, "description": "快 EMA 周期，默认 12"},
+        "period_slow": {"type": "integer", "label": "慢线周期", "required": True, "default": 26, "description": "慢 EMA 周期，默认 26"},
+        "period_signal": {"type": "integer", "label": "信号线周期", "required": True, "default": 9, "description": "信号 EMA 周期，默认 9"},
+        "window": _window_param_schema(),
+    }
+
+    def __init__(self, **args):
+        self.symbol = args["symbol"]
+        self.period_fast = int(args.get("period_fast", 12))
+        self.period_slow = int(args.get("period_slow", 26))
+        self.period_signal = int(args.get("period_signal", 9))
+        self.window = args.get("window", "1h")
+
+    async def compute(self, ctx: ExecutionContext) -> float:
+        symbol = self.symbol or ctx.symbol
+        if not symbol:
+            return 0.0
+        bar = _window_to_bar(self.window)
+        # 需要 slow + signal 根 K 线以保证 EMA 收敛
+        limit = self.period_slow + self.period_signal
+        closes = await _fetch_closes(ctx, symbol, bar, limit)
+        if not closes or len(closes) < self.period_slow + 1:
+            return 0.0
+        ema_fast = _ema_series(closes, self.period_fast)
+        ema_slow = _ema_series(closes, self.period_slow)
+        # DIF 序列
+        dif = [f - s for f, s in zip(ema_fast, ema_slow)]
+        # DEA = EMA(DIF, signal)
+        dea = _ema_series(dif, self.period_signal)
+        if not dea:
+            return 0.0
+        # MACD 柱 = 2 * (DIF - DEA)
+        return 2.0 * (dif[-1] - dea[-1])
+
+
+@indicator("ema")
+class EMA:
+    """EMA 指数移动平均线指标。"""
+
+    category = "行情·技术指标"
+    label = "EMA均线"
+    description = "计算 EMA 指数移动平均线"
+    output_type = float
+    priority = "P1"
+    param_schema = {
+        "symbol": {"type": "string", "label": "交易对", "required": True, "description": "交易对"},
+        "period": {"type": "integer", "label": "周期", "required": True, "default": 20, "description": "EMA 周期，默认 20"},
+        "window": _window_param_schema(),
+    }
+
+    def __init__(self, **args):
+        self.symbol = args["symbol"]
+        self.period = int(args.get("period", 20))
+        self.window = args.get("window", "1h")
+
+    async def compute(self, ctx: ExecutionContext) -> float:
+        symbol = self.symbol or ctx.symbol
+        if not symbol:
+            return 0.0
+        bar = _window_to_bar(self.window)
+        closes = await _fetch_closes(ctx, symbol, bar, self.period)
+        if not closes:
+            return 0.0
+        ema_series = _ema_series(closes, self.period)
+        if not ema_series:
+            return 0.0
+        return ema_series[-1]
+
+
+@indicator("kdj")
+class KDJ:
+    """KDJ 随机指标：返回 J 值。
+
+    RSV = (close - lowest_low) / (highest_high - lowest_low) * 100
+    K = 2/3 * K_prev + 1/3 * RSV
+    D = 2/3 * D_prev + 1/3 * K
+    J = 3 * K - 2 * D
+    """
+
+    category = "行情·技术指标"
+    label = "KDJ"
+    description = "计算 KDJ 随机指标，返回 J 值"
+    output_type = float
+    priority = "P1"
+    param_schema = {
+        "symbol": {"type": "string", "label": "交易对", "required": True, "description": "交易对"},
+        "period": {"type": "integer", "label": "周期", "required": True, "default": 9, "description": "KDJ 周期，默认 9"},
+        "window": _window_param_schema(),
+    }
+
+    def __init__(self, **args):
+        self.symbol = args["symbol"]
+        self.period = int(args.get("period", 9))
+        self.window = args.get("window", "1h")
+
+    async def compute(self, ctx: ExecutionContext) -> float:
+        symbol = self.symbol or ctx.symbol
+        if not symbol:
+            return 50.0
+        bar = _window_to_bar(self.window)
+        try:
+            candles = await ctx.client.get_candles(symbol, bar=bar, limit=str(self.period))
+        except Exception:
+            return 50.0
+        if not candles or len(candles) < self.period:
+            return 50.0
+        candles = list(reversed(candles))  # 旧→新
+        try:
+            highs = [float(c[2]) for c in candles]
+            lows = [float(c[3]) for c in candles]
+            closes = [float(c[4]) for c in candles]
+        except (IndexError, ValueError, TypeError):
+            return 50.0
+
+        # K/D 初值取 50（业界惯例）
+        k = 50.0
+        d = 50.0
+        for i in range(self.period - 1, len(closes)):
+            lowest_low = min(lows[i - self.period + 1: i + 1])
+            highest_high = max(highs[i - self.period + 1: i + 1])
+            if highest_high == lowest_low:
+                rsv = 50.0
+            else:
+                rsv = (closes[i] - lowest_low) / (highest_high - lowest_low) * 100.0
+            k = 2.0 / 3.0 * k + 1.0 / 3.0 * rsv
+            d = 2.0 / 3.0 * d + 1.0 / 3.0 * k
+        j = 3.0 * k - 2.0 * d
+        return j
+
+
+@indicator("volatility")
+class Volatility:
+    """波动率指标：收益率标准差。"""
+
+    category = "行情·技术指标"
+    label = "波动率"
+    description = "计算指定周期内收益率的标准差（波动率）"
+    output_type = float
+    priority = "P1"
+    param_schema = {
+        "symbol": {"type": "string", "label": "交易对", "required": True, "description": "交易对"},
+        "period": {"type": "integer", "label": "周期", "required": True, "default": 20, "description": "波动率周期，默认 20"},
+        "window": _window_param_schema(),
+    }
+
+    def __init__(self, **args):
+        self.symbol = args["symbol"]
+        self.period = int(args.get("period", 20))
+        self.window = args.get("window", "1h")
+
+    async def compute(self, ctx: ExecutionContext) -> float:
+        symbol = self.symbol or ctx.symbol
+        if not symbol:
+            return 0.0
+        bar = _window_to_bar(self.window)
+        # 需要 period+1 根 K 线来算 period 个收益率
+        closes = await _fetch_closes(ctx, symbol, bar, self.period + 1)
+        if not closes or len(closes) < 2:
+            return 0.0
+        # 计算收益率序列
+        returns = []
+        for i in range(1, len(closes)):
+            if closes[i - 1] == 0:
+                continue
+            returns.append((closes[i] - closes[i - 1]) / closes[i - 1])
+        if len(returns) < 2:
+            return 0.0
+        # 总体标准差
+        mean = sum(returns) / len(returns)
+        variance = sum((r - mean) ** 2 for r in returns) / len(returns)
+        return variance ** 0.5
+
+
+@indicator("volume_24h")
+class Volume24h:
+    """24 小时成交量指标。"""
+
+    category = "行情·价格"
+    label = "24h成交量"
+    description = "获取指定交易对的 24 小时成交量（vol24h）"
+    output_type = float
+    priority = "P1"
+    param_schema = {
+        "symbol": {"type": "string", "label": "交易对", "required": True, "description": "交易对"},
+    }
+
+    def __init__(self, **args):
+        self.symbol = args["symbol"]
+
+    async def compute(self, ctx: ExecutionContext) -> float:
+        symbol = self.symbol or ctx.symbol
+        if not symbol:
+            return 0.0
+        try:
+            data = await ctx.client.get_ticker(symbol)
+        except Exception:
+            return 0.0
+        if not data:
+            return 0.0
+        try:
+            return float(data[0].get("vol24h", "0"))
+        except (ValueError, TypeError, KeyError, IndexError):
+            return 0.0

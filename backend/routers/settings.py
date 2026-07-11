@@ -189,6 +189,26 @@ def get_sample_configs_route(
     return {"samples": samples}
 
 
+# ========== Rate Limit Status ==========
+
+@router.get("/rate-limit")
+def get_rate_limit_status_route(
+    user: User = Depends(get_current_user),
+):
+    """返回当前 API 限流配额状态。
+
+    从正在运行的策略实例中获取其 OKXClient 的限流配额信息。
+    若无运行中的策略，返回 None 值。
+    """
+    from services.strategy_engine import strategy_engine
+    running_ids = strategy_engine.get_running_ids()
+    for sid in running_ids:
+        client = strategy_engine._get_client_for_strategy(sid)
+        if client is not None:
+            return client.get_rate_limit_status()
+    return {"remaining": None, "limit": None, "percentage": None}
+
+
 @router.post("/proxy/sample-configs/import")
 def import_sample_config_route(
     body: dict,

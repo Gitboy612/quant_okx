@@ -8,6 +8,9 @@ import {
   Activity,
   Settings,
   Eye,
+  FlaskConical,
+  Bell,
+  PieChart,
 } from 'lucide-react'
 import qstudioLogoSrc from '../assets/qstudio-logo.jpg'
 
@@ -15,19 +18,39 @@ const links = [
   { to: '/dashboard', icon: LayoutDashboard, label: '仪表盘' },
   { to: '/strategies', icon: TrendingUp, label: '策略管理' },
   { to: '/monitoring', icon: Eye, label: '策略监测' },
+  { to: '/backtest', icon: FlaskConical, label: '历史回测' },
+  { to: '/analytics', icon: PieChart, label: '归因分析' },
   { to: '/orders', icon: FileText, label: '交易记录' },
   { to: '/accounts', icon: Wallet, label: '账户管理' },
   { to: '/api-logs', icon: Activity, label: 'API日志' },
   { to: '/logs', icon: ScrollText, label: '操作日志' },
+  { to: '/notifications', icon: Bell, label: '告警通知' },
 ]
 
 const bottomLinks = [
   { to: '/settings', icon: Settings, label: '系统设置' },
 ]
 
-export default function Sidebar() {
+interface SidebarProps {
+  mobileOpen: boolean
+  onClose: () => void
+}
+
+export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
   return (
-    <aside className="fixed left-0 top-0 h-screen w-[260px] z-30 flex flex-col">
+    <>
+      {/* Mobile overlay */}
+      {mobileOpen && (
+        <div
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 md:hidden"
+          onClick={onClose}
+        />
+      )}
+      <aside
+        className={`fixed left-0 top-0 h-screen w-[260px] z-50 flex flex-col transition-transform duration-300 ease-in-out md:translate-x-0 ${
+          mobileOpen ? 'translate-x-0' : '-translate-x-full'
+        }`}
+      >
       <div className="absolute inset-0 bg-[#050711] border-r border-[rgba(0,212,170,0.06)]" />
 
       <div className="relative z-10 flex flex-col h-full">
@@ -112,5 +135,6 @@ export default function Sidebar() {
         </div>
       </div>
     </aside>
+    </>
   )
 }
