@@ -230,10 +230,10 @@ class BaseStrategy(ABC):
     def is_paused(self):
         return self._paused
 
-    def record_order(self, symbol: str, side: str, order_type: str, price: float, quantity: float, order_id: str = "", status: str = "filled"):
+    async def record_order(self, symbol: str, side: str, order_type: str, price: float, quantity: float, order_id: str = "", status: str = "filled"):
         # Delegate to OrderManager for persistence
         if status == "live":
-            self.order_manager.add_order(
+            await self.order_manager.add_order(
                 ordId=order_id,
                 clOrdId="",
                 symbol=symbol,
@@ -262,7 +262,10 @@ class BaseStrategy(ABC):
                             "price": price, "quantity": quantity, "order_id": order_id, "status": status})
 
     def _should_record_pnl(self, total_pnl: float, interval_seconds: float = 60.0, change_threshold: float = 0.01) -> bool:
-        """判断是否应写入 PnL 记录：间隔 ≥ 60s 或 total_pnl 变化超阈值。"""
+        """判断是否应写入 PnL 记录：间隔 ≥ 60s 或 total_pnl 变化超阈值。
+
+        此方法由 PnlAccountingEngine 调用，策略不应直接调用。
+        """
         import time
         now = time.time()
         if now - self._last_pnl_record_ts >= interval_seconds:
@@ -285,7 +288,13 @@ class BaseStrategy(ABC):
         self._last_pnl_record_ts = time.time()
         self._last_pnl_total = total_pnl
 
-    def record_pnl(self, equity: float, unrealized_pnl: float, realized_pnl: float):
+    def record_pnl(self, equity: float, unrealized_pnl: float, realized_pnl: float,
+                   net_position: float = None, avg_buy_price: float = None,
+                   total_fee: float = None, order_count: int = None):
+        """写入一条 PnL 记录到数据库。
+
+        此方法由 PnlAccountingEngine 调用，策略不应直接调用。
+        """
         from models.pnl import PnlRecord
         db = self.db_session_factory()
         try:
@@ -296,6 +305,10 @@ class BaseStrategy(ABC):
                 unrealized_pnl=unrealized_pnl,
                 realized_pnl=realized_pnl,
                 total_pnl=unrealized_pnl + realized_pnl,
+                net_position=net_position,
+                avg_buy_price=avg_buy_price,
+                total_fee=total_fee,
+                order_count=order_count,
             )
             db.add(record)
             db.commit()
@@ -320,6 +333,10 @@ class BaseStrategy(ABC):
                 equity = latest.equity if latest else 0
 
                 last_unrealized = latest.unrealized_pnl if latest else 0
+                last_net_position = latest.net_position if latest else None
+                last_avg_buy_price = latest.avg_buy_price if latest else None
+                last_total_fee = latest.total_fee if latest else None
+                last_order_count = latest.order_count if latest else None
                 record = PnlRecord(
                     account_id=self.account_id,
                     strategy_instance_id=self.instance_id,
@@ -329,6 +346,10 @@ class BaseStrategy(ABC):
                     total_pnl=last_unrealized + realized,
                     is_final=True,
                     recorded_at=datetime.now(timezone.utc),
+                    net_position=last_net_position,
+                    avg_buy_price=last_avg_buy_price,
+                    total_fee=last_total_fee,
+                    order_count=last_order_count,
                 )
                 db.add(record)
                 db.commit()

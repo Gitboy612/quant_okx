@@ -22,6 +22,7 @@ import { formatInstId, isContractPair, INST_ID_LABEL } from '../utils/instId'
 import StatusBadge from '../components/StatusBadge'
 import Modal from '../components/Modal'
 import DslEditor from '../components/DslEditor'
+import OrderQtyInput, { type SzFields } from '../components/OrderQtyInput'
 import type { StrategyInstance, StrategyTemplate, Account, ParamSchemaField, StrategyEvent } from '../types'
 
 // 参数字段（兼容 ParamSchemaField 与 QS-Model ParamDefinition）
@@ -575,12 +576,14 @@ export default function StrategiesPage() {
                         })()}
                         <div className="text-xs text-[#6B6B7B] mb-3 uppercase tracking-wide">策略参数</div>
                         <div className="grid grid-cols-2 gap-3">
-                          {Object.entries(inst.params).map(([key, value]) => {
+                          {Object.entries(inst.params).filter(([key]) => key !== 'sz_fields').map(([key, value]) => {
                             const field = schema[key]
                             const label = field?.label ?? key
                             const hint = field?.hint ?? ''
+                            const isOrderQtyField = key === 'order_qty' || key === 'sz'
+                            const useOrderQty = isOrderQtyField && isContractPair(inst.symbol)
                             return (
-                              <div key={key}>
+                              <div key={key} className={useOrderQty ? 'col-span-2' : ''}>
                                 <label className="text-xs text-[#6B6B7B]" title={hint}>
                                   {label}
                                   {hint ? <span className="ml-1 opacity-50">({hint})</span> : null}
@@ -599,6 +602,25 @@ export default function StrategiesPage() {
                                       )
                                     }}
                                     className="mt-1 w-full"
+                                  />
+                                ) : useOrderQty && (field?.type === 'number' || field?.type === 'int' || field?.type === 'float') ? (
+                                  <OrderQtyInput
+                                    symbol={inst.symbol}
+                                    value={typeof value === 'number' ? value : undefined}
+                                    szFields={(inst.params.sz_fields as SzFields) ?? null}
+                                    onChange={(sz, fields) => {
+                                      setInstances((prev) =>
+                                        prev.map((pi) =>
+                                          pi.id === inst.id
+                                            ? { ...pi, params: { ...pi.params, [key]: sz ?? 0, sz_fields: fields } }
+                                            : pi,
+                                        ),
+                                      )
+                                    }}
+                                    step={field?.step ?? (field?.type === 'int' || field?.type === 'integer' ? 1 : 'any')}
+                                    min={field?.min}
+                                    max={field?.max}
+                                    className="mt-1"
                                   />
                                 ) : field?.type === 'number' ? (
                                   <NumberInput
@@ -804,8 +826,11 @@ export default function StrategiesPage() {
                   const isSelect = ftype === 'select'
                   const optionLabels = field.option_labels
                   const step = field.step ?? (isInt ? 1 : 'any')
+                  const currentSymbol = String(customParams.symbol || '')
+                  const isOrderQtyField = key === 'order_qty' || key === 'sz'
+                  const useOrderQtyInput = isOrderQtyField && isNumeric && isContractPair(currentSymbol)
                   return (
-                    <div key={key}>
+                    <div key={key} className={useOrderQtyInput ? 'sm:col-span-2' : ''}>
                       <label className="text-xs text-[#6B6B7B]" title={field.hint}>
                         {field.label}
                       </label>
@@ -843,6 +868,23 @@ export default function StrategiesPage() {
                             {Boolean(customParams[key] ?? field.default) ? '开启' : '关闭'}
                           </span>
                         </div>
+                      ) : useOrderQtyInput ? (
+                        <OrderQtyInput
+                          symbol={currentSymbol}
+                          value={typeof customParams[key] === 'number' ? (customParams[key] as number) : (typeof field.default === 'number' ? field.default : undefined)}
+                          szFields={(customParams.sz_fields as SzFields) ?? null}
+                          onChange={(sz, fields) => {
+                            setCustomParams((prev) => ({
+                              ...prev,
+                              [key]: sz,
+                              sz_fields: fields,
+                            }))
+                          }}
+                          step={step}
+                          min={field.min}
+                          max={field.max}
+                          className="mt-1"
+                        />
                       ) : isNumeric ? (
                         <NumberInput
                           value={typeof customParams[key] === 'number' ? (customParams[key] as number) : (typeof field.default === 'number' ? field.default : undefined)}

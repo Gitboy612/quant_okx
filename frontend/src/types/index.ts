@@ -132,6 +132,10 @@ export interface PnlRecord {
   unrealized_pnl: number
   realized_pnl: number
   total_pnl: number
+  net_position?: number
+  avg_buy_price?: number
+  total_fee?: number
+  order_count?: number
   recorded_at: string
 }
 

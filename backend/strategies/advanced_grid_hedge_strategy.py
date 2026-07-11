@@ -64,7 +64,7 @@ class AdvancedGridHedgeStrategy(BaseStrategy):
                         sz=str(round(hedge_qty, 6)),
                     )
                     hedged = True
-                    self.record_order(
+                    await self.record_order(
                         symbol, "sell", "market", current_price, round(hedge_qty, 6),
                         status="hedge_open",
                     )
@@ -78,7 +78,7 @@ class AdvancedGridHedgeStrategy(BaseStrategy):
                         sz=str(round(order_qty * n_pct, 6)),
                     )
                     hedged = False
-                    self.record_order(
+                    await self.record_order(
                         symbol, "buy", "market", current_price, round(order_qty * n_pct, 6),
                         status="hedge_close",
                     )
@@ -97,7 +97,7 @@ class AdvancedGridHedgeStrategy(BaseStrategy):
                                         ord_type="market",
                                         sz=str(round(rescue_qty, 6)),
                                     )
-                                    self.record_order(
+                                    await self.record_order(
                                         symbol, "buy", "market", current_price, round(rescue_qty, 6),
                                         status="emergency_margin",
                                     )
@@ -109,9 +109,6 @@ class AdvancedGridHedgeStrategy(BaseStrategy):
                     if self._initial_equity == 0.0:
                         self._initial_equity = total_equity
                     strategy_pnl = total_equity - self._initial_equity
-                    if self._should_record_pnl(strategy_pnl):
-                        self.record_pnl(total_equity, 0, strategy_pnl)
-                        self._mark_pnl_recorded(strategy_pnl)
 
             except Exception:
                 pass

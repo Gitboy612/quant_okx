@@ -63,10 +63,10 @@ class TestOrderManagerNetPosition:
         """连续两笔买单成交：net_position=0.03，avg_buy_price=40666.67"""
         mgr = self._make_mgr()
 
-        mgr.add_order("o1", "c1", "BTC-USDT", "buy", "40000", "0.01")
+        asyncio.run(mgr.add_order("o1", "c1", "BTC-USDT", "buy", "40000", "0.01"))
         mgr.update_order("o1", state="filled", fillPx="40000", fillSz="0.01")
 
-        mgr.add_order("o2", "c2", "BTC-USDT", "buy", "41000", "0.02")
+        asyncio.run(mgr.add_order("o2", "c2", "BTC-USDT", "buy", "41000", "0.02"))
         mgr.update_order("o2", state="filled", fillPx="41000", fillSz="0.02")
 
         net_pos, avg_price = mgr.get_position_summary()
@@ -78,10 +78,10 @@ class TestOrderManagerNetPosition:
         """先买 0.01@40000，再卖 0.01@41000：net_position=0，均价保持 40000"""
         mgr = self._make_mgr()
 
-        mgr.add_order("o1", "c1", "BTC-USDT", "buy", "40000", "0.01")
+        asyncio.run(mgr.add_order("o1", "c1", "BTC-USDT", "buy", "40000", "0.01"))
         mgr.update_order("o1", state="filled", fillPx="40000", fillSz="0.01")
 
-        mgr.add_order("o2", "c2", "BTC-USDT", "sell", "41000", "0.01")
+        asyncio.run(mgr.add_order("o2", "c2", "BTC-USDT", "sell", "41000", "0.01"))
         mgr.update_order("o2", state="filled", fillPx="41000", fillSz="0.01")
 
         net_pos, avg_price = mgr.get_position_summary()
@@ -105,7 +105,7 @@ class TestOrderManagerFee:
     def test_get_order_fee(self):
         """add_order 后通过 update_order 设置 fee=0.5，get_order_fee 返回 0.5"""
         mgr = OrderManager(MagicMock(), MagicMock(), 1, 1)
-        mgr.add_order("o1", "c1", "BTC-USDT", "buy", "40000", "0.01")
+        asyncio.run(mgr.add_order("o1", "c1", "BTC-USDT", "buy", "40000", "0.01"))
         mgr.update_order("o1", fee="0.5")
         assert mgr.get_order_fee("o1") == pytest.approx(0.5)
 

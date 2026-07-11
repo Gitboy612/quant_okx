@@ -18,6 +18,10 @@ class OrderInfo:
     fee: str = ""
     cTime: str = ""
     uTime: str = ""
+    ct_val: float = 1.0
+    ct_type: str = ""
+    settle_ccy: str = ""
+    actual_qty: float = 0.0
 
     def to_dict(self) -> dict:
         return {
@@ -33,16 +37,24 @@ class OrderInfo:
             "fee": self.fee,
             "cTime": self.cTime,
             "uTime": self.uTime,
+            "ct_val": self.ct_val,
+            "ct_type": self.ct_type,
+            "settle_ccy": self.settle_ccy,
+            "actual_qty": self.actual_qty,
         }
 
 
 class OrderManager:
-    def __init__(self, db_session_factory, okx_client, strategy_instance_id: int, account_id: int):
+    def __init__(self, db_session_factory, okx_client, strategy_instance_id: int, account_id: int, instrument_cache=None):
         self._db_session_factory = db_session_factory
         self._okx_client = okx_client
         self._strategy_instance_id = strategy_instance_id
         self._account_id = account_id
         self._orders: dict[str, OrderInfo] = {}
+        if instrument_cache is None:
+            from services.instrument_cache import instrument_cache as _instrument_cache
+            instrument_cache = _instrument_cache
+        self._instrument_cache = instrument_cache
         self._callbacks: dict[str, list[Callable]] = {
             "filled": [],
             "canceled": [],
@@ -59,7 +71,14 @@ class OrderManager:
         self._total_buy_value: float = 0.0     # 累计买入价值（qty × px）
         self._total_sell_qty: float = 0.0      # 累计卖出量
 
-    def add_order(self, ordId: str, clOrdId: str, symbol: str, side: str, px: str, sz: str, state: str = "live"):
+    async def add_order(self, ordId: str, clOrdId: str, symbol: str, side: str, px: str, sz: str, state: str = "live"):
+        # 获取 instrument 元数据
+        inst_info = await self._instrument_cache.get_instrument(symbol, self._okx_client)
+        ct_val = inst_info.get("ctVal", 1.0)
+        ct_type = inst_info.get("ctType") or ""
+        settle_ccy = inst_info.get("settleCcy") or ""
+        sz_float = float(sz) if sz else 0.0
+        actual_qty = sz_float * ct_val  # 合约：张数 × 面值；现货：ctVal=1.0，actual_qty=sz
         order = OrderInfo(
             ordId=ordId,
             clOrdId=clOrdId,
@@ -68,14 +87,18 @@ class OrderManager:
             px=px,
             sz=sz,
             state=state,
+            ct_val=ct_val,
+            ct_type=ct_type,
+            settle_ccy=settle_ccy,
+            actual_qty=actual_qty,
         )
         self._orders[ordId] = order
         self._async_persist(order)
         return order
 
-    def add_batch(self, orders: list[dict]):
+    async def add_batch(self, orders: list[dict]):
         for o in orders:
-            self.add_order(
+            await self.add_order(
                 ordId=o.get("ordId", ""),
                 clOrdId=o.get("clOrdId", ""),
                 symbol=o.get("symbol", ""),
@@ -93,6 +116,13 @@ class OrderManager:
         for key, value in kwargs.items():
             if hasattr(order, key):
                 setattr(order, key, value)
+        # 若更新了 fillSz 且 actual_qty 未被显式传入，则根据 sz 和 ct_val 重新计算 actual_qty
+        if "fillSz" in kwargs and "actual_qty" not in kwargs:
+            if not order.actual_qty:
+                fill_sz_float = float(order.fillSz) if order.fillSz else 0.0
+                sz_float = float(order.sz) if order.sz else 0.0
+                base_qty = fill_sz_float if fill_sz_float > 0 else sz_float
+                order.actual_qty = base_qty * (order.ct_val or 1.0)
         new_state = order.state
         if new_state != old_state:
             if new_state == "filled":
@@ -112,20 +142,25 @@ class OrderManager:
         买单：累加买入量与价值，更新加权均价
         卖单：扣减净持仓（不改变加权均价，实现 FIFO 平仓）
         """
-        fill_sz = float(order.fillSz) if order.fillSz else (float(order.sz) if order.sz else 0)
+        # 优先用 actual_qty（已乘 ct_val），回退到 fillSz × ct_val
+        if order.actual_qty and order.actual_qty > 0:
+            fill_qty = order.actual_qty
+        else:
+            fill_sz = float(order.fillSz) if order.fillSz else (float(order.sz) if order.sz else 0)
+            fill_qty = fill_sz * (order.ct_val or 1.0)
         fill_px = float(order.fillPx) if order.fillPx else (float(order.px) if order.px else 0)
-        if fill_sz <= 0:
+        if fill_qty <= 0:
             return
 
         if order.side == "buy":
-            self._total_buy_qty += fill_sz
-            self._total_buy_value += fill_sz * fill_px
+            self._total_buy_qty += fill_qty
+            self._total_buy_value += fill_qty * fill_px
             if self._total_buy_qty > 0:
                 self._avg_buy_price = self._total_buy_value / self._total_buy_qty
-            self._net_position += fill_sz
+            self._net_position += fill_qty
         elif order.side == "sell":
-            self._total_sell_qty += fill_sz
-            self._net_position -= fill_sz
+            self._total_sell_qty += fill_qty
+            self._net_position -= fill_qty
 
     def get_position_summary(self) -> tuple[float, float]:
         """返回当前净持仓与加权平均买入价，供策略计算未实现盈亏。"""
@@ -200,6 +235,10 @@ class OrderManager:
                         fillSz=str(row.fill_sz) if row.fill_sz else "",
                         fee=str(row.fee) if row.fee else "",
                         uTime=row.update_time or "",
+                        ct_val=row.ct_val if row.ct_val is not None else 1.0,
+                        ct_type=row.ct_type or "",
+                        settle_ccy=row.settle_ccy or "",
+                        actual_qty=row.actual_qty if row.actual_qty is not None else 0.0,
                     )
                     self._orders[row.order_id] = order_info
                     count += 1
@@ -250,6 +289,10 @@ class OrderManager:
                 existing.status = self._map_state_to_status(order.state)
                 existing.update_time = order.uTime
                 existing.updated_at = datetime.now(timezone.utc)
+                existing.ct_val = order.ct_val
+                existing.ct_type = order.ct_type or None
+                existing.settle_ccy = order.settle_ccy or None
+                existing.actual_qty = order.actual_qty
             else:
                 new_order = Order(
                     strategy_instance_id=self._strategy_instance_id,
@@ -268,6 +311,10 @@ class OrderManager:
                     state=order.state,
                     status=self._map_state_to_status(order.state),
                     update_time=order.uTime,
+                    ct_val=order.ct_val,
+                    ct_type=order.ct_type or None,
+                    settle_ccy=order.settle_ccy or None,
+                    actual_qty=order.actual_qty,
                 )
                 db.add(new_order)
             db.commit()

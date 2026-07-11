@@ -38,10 +38,36 @@ export default function DashboardPage() {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const selectedAccount = accounts.find((a) => a.id === selectedAccountId)
 
+  const computeStartTime = (range: TimeRange): string | undefined => {
+    const now = new Date()
+    if (range === '24h') {
+      const start = new Date(now.getTime() - 24 * 60 * 60 * 1000)
+      return start.toISOString()
+    }
+    if (range === '7d') {
+      const start = new Date(now)
+      start.setHours(0, 0, 0, 0)
+      start.setDate(start.getDate() - 7)
+      return start.toISOString()
+    }
+    if (range === '30d') {
+      const start = new Date(now)
+      start.setHours(0, 0, 0, 0)
+      start.setDate(start.getDate() - 30)
+      return start.toISOString()
+    }
+    // all: 不传 start_time
+    return undefined
+  }
+
   const loadBaseData = useCallback(() => {
     const sid = selectedStrategyId || undefined
     getPnlSummary().then((res) => { setSummary(res.data); setSummaryLoading(false); setKpiLoading(false) }).catch(() => { setSummaryLoading(false); setKpiLoading(false) })
-    listPnlRecords(sid ? { strategy_instance_id: sid } : { limit: 200 }).then((res) => setPnlRecords(res.data)).catch(() => {})
+    const startTime = computeStartTime(timeRange)
+    listPnlRecords({
+      ...(sid ? { strategy_instance_id: sid } : {}),
+      ...(startTime ? { start_time: startTime } : {}),
+    }).then((res) => setPnlRecords(res.data)).catch(() => {})
     listInstances().then((res) => setInstances(res.data)).catch(() => {})
     listOrders(sid ? { strategy_instance_id: sid, status: 'filled', limit: 10, sort_by: 'updated_at' } : { status: 'filled', limit: 10, sort_by: 'updated_at' }).then((res) => {
       setOrders(res.data)
@@ -51,7 +77,7 @@ export default function DashboardPage() {
       setLiveOrders(res.data)
     }).catch(() => {})
     listApiCallLogs(sid ? { strategy_instance_id: sid, limit: 50 } : { limit: 50 }).then((res) => { setApiLogs(res.data); setLogsLoading(false) }).catch(() => setLogsLoading(false))
-  }, [selectedStrategyId])
+  }, [selectedStrategyId, timeRange])
 
   const loadAssets = useCallback((accountId: number) => {
     setAssetLoading(true)

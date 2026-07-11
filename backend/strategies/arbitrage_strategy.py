@@ -48,26 +48,25 @@ class ArbitrageStrategy(BaseStrategy):
                     if spread_pct > 0:
                         await self.client.place_order(inst_id=futures_symbol, side="sell", ord_type="market", sz=str(order_qty))
                         await self.client.place_order(inst_id=spot_symbol, side="buy", ord_type="market", sz=str(order_qty))
-                        self.record_order(futures_symbol, "sell", "market", futures_price, order_qty)
-                        self.record_order(spot_symbol, "buy", "market", spot_price, order_qty)
+                        await self.record_order(futures_symbol, "sell", "market", futures_price, order_qty)
+                        await self.record_order(spot_symbol, "buy", "market", spot_price, order_qty)
                     else:
                         await self.client.place_order(inst_id=futures_symbol, side="buy", ord_type="market", sz=str(order_qty))
                         await self.client.place_order(inst_id=spot_symbol, side="sell", ord_type="market", sz=str(order_qty))
-                        self.record_order(futures_symbol, "buy", "market", futures_price, order_qty)
-                        self.record_order(spot_symbol, "sell", "market", spot_price, order_qty)
+                        await self.record_order(futures_symbol, "buy", "market", futures_price, order_qty)
+                        await self.record_order(spot_symbol, "sell", "market", spot_price, order_qty)
                     position_open = True
 
                 elif position_open and abs(spread_pct) < spread_threshold * 0.3:
                     await self.client.place_order(inst_id=futures_symbol, side="buy" if spread_pct > 0 else "sell", ord_type="market", sz=str(order_qty))
                     await self.client.place_order(inst_id=spot_symbol, side="sell" if spread_pct > 0 else "buy", ord_type="market", sz=str(order_qty))
-                    self.record_order(futures_symbol, "buy", "market", futures_price, order_qty, status="close")
-                    self.record_order(spot_symbol, "sell", "market", spot_price, order_qty, status="close")
+                    await self.record_order(futures_symbol, "buy", "market", futures_price, order_qty, status="close")
+                    await self.record_order(spot_symbol, "sell", "market", spot_price, order_qty, status="close")
                     position_open = False
 
                 balances = await self.client.get_balance()
                 if balances:
                     total_equity = float(balances.get("totalEq", "0"))
-                    self.record_pnl(total_equity, 0, 0)
 
             except Exception:
                 pass

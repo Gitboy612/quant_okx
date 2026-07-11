@@ -19,3 +19,7 @@ class PnlRecord(Base):
     total_pnl = Column(Float, nullable=True)
     is_final = Column(Boolean, default=False, nullable=False, server_default="0")
     recorded_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    net_position = Column(Float, nullable=True)
+    avg_buy_price = Column(Float, nullable=True)
+    total_fee = Column(Float, nullable=True)
+    order_count = Column(Integer, nullable=True)

@@ -3,9 +3,16 @@ import time
 from typing import Optional
 
 import httpx
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query, Request
+from sqlalchemy.orm import Session
 
 from config import OKX_BASE_URL, OKX_DNS_OVERRIDE
+from database import get_db
+from middleware.auth import get_current_user
+from models.account import Account
+from models.user import User
+from services.instrument_cache import instrument_cache
+from services.okx_client import OKXClient
 
 router = APIRouter(tags=["market"])
 
@@ -120,3 +127,78 @@ async def get_spot_tickers(symbols: str = Query("BTC,ETH,AVAX,LINK,SOL,HYPE,OKB,
         if sym in _cache:
             result[sym] = _cache[sym]
     return {"code": "0", "data": result}
+
+
+def _build_public_client(db: Session) -> Optional[OKXClient]:
+    """从第一个可用账户构造 OKXClient（仅需 public 接口，但复用账户凭证）。
+
+    无可用账户时返回 None，调用方应使用兜底值。
+    """
+    account = db.query(Account).filter(Account.is_active == True).first()  # noqa: E712
+    if account is None:
+        return None
+    return OKXClient(
+        api_key_encrypted=account.api_key_encrypted,
+        secret_encrypted=account.secret_key_encrypted,
+        passphrase_encrypted=account.passphrase_encrypted,
+        trade_mode=account.trade_mode,
+        account_name=account.name,
+    )
+
+
+@router.get("/api/market/instrument")
+async def get_instrument_info(
+    instId: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """获取合约/现货 instrument 元数据（ctVal, tickSz 等）。
+
+    优先从 InstrumentCache 读取；缓存未命中时用第一个可用账户的 OKXClient 拉取并写入缓存。
+    无可用账户时返回兜底值 {ctVal: 1.0}。
+    """
+    client = _build_public_client(db)
+    try:
+        info = await instrument_cache.get_instrument(instId, client)
+    finally:
+        if client is not None:
+            try:
+                client._client.close()
+            except Exception:
+                pass
+            try:
+                await client._async_client.aclose()
+            except Exception:
+                pass
+    return {"instId": instId, **info}
+
+
+@router.get("/api/market/ticker")
+async def get_ticker_price(
+    symbol: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """获取某个 instId 的最新成交价（用于稳定币单位换算）。
+
+    使用公共 httpx 客户端直接请求 OKX market/ticker，无需账户凭证。
+    """
+    http_client = _get_http_client()
+    url = f"{OKX_BASE_URL}/api/v5/market/ticker?instId={symbol}"
+    try:
+        resp = await http_client.get(url)
+        data = resp.json()
+        if data.get("code") != "0" or not data.get("data"):
+            return {"code": "-1", "msg": data.get("msg", "Failed to fetch ticker"), "data": None}
+        item = data["data"][0]
+        return {
+            "code": "0",
+            "data": {
+                "instId": item.get("instId", symbol),
+                "last": item.get("last", "0"),
+            },
+        }
+    except Exception as e:
+        return {"code": "-1", "msg": str(e), "data": None}

@@ -311,6 +311,7 @@ def _make_grid_ctx(current_price=45000.0, symbol="BTC-USDT"):
         "code": "0", "data": [{"ordId": f"single_{kw.get('side', 'x')}_{kw.get('px', '0')}"}]
     })
     order_manager = MagicMock()
+    order_manager.add_order = AsyncMock()
     strategy = MagicMock()
     strategy._record_event = MagicMock()
     strategy.add_realized_pnl = MagicMock()

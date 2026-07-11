@@ -60,7 +60,7 @@ class TrendStrategy(BaseStrategy):
                 self._avg_entry_price = (self._avg_entry_price * abs(self._position) + px * sz) / new_total if new_total > 0 else px
                 self._position = -new_total
 
-        self.record_order(symbol, side, "market", px, sz, order_id=order_info.ordId, status="filled")
+        await self.record_order(symbol, side, "market", px, sz, order_id=order_info.ordId, status="filled")
 
     async def execute(self):
         if not await self.validate_params():
@@ -135,28 +135,8 @@ class TrendStrategy(BaseStrategy):
                         sz=str(order_qty),
                     )
                     current_price = closes[-1]
-                    self.record_order(symbol, signal, "market", current_price, order_qty)
+                    await self.record_order(symbol, signal, "market", current_price, order_qty)
                     last_signal = signal
-
-                # Calculate unrealized PnL from position
-                current_price = closes[-1]
-                if self._position != 0:
-                    unrealized_pnl = (current_price - self._avg_entry_price) * self._position
-                    # Deduct estimated close fee
-                    estimated_close_fee = abs(self._position) * current_price * self._fee_rate
-                    unrealized_pnl -= estimated_close_fee
-                else:
-                    unrealized_pnl = 0.0
-
-                realized_pnl = self.get_realized_pnl()
-                total_pnl = unrealized_pnl + realized_pnl
-
-                # Get equity for recording (fallback to initial_equity + pnl)
-                total_equity = self._initial_equity + total_pnl
-
-                if self._should_record_pnl(total_pnl):
-                    self.record_pnl(total_equity, unrealized_pnl, realized_pnl)
-                    self._mark_pnl_recorded(total_pnl)
 
             except Exception:
                 pass

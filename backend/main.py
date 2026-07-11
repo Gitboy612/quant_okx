@@ -47,7 +47,7 @@ if FRONTEND_DIR.exists():
 
 
 @app.on_event("startup")
-def startup():
+async def startup():
     init_db()
     strategy_engine.seed_templates()
 
@@ -72,6 +72,15 @@ def startup():
         orphaned = db.query(StrategyInstance).filter(
             StrategyInstance.status.in_(["running", "paused"])
         ).all()
+
+        # 在将 running 改为 stopped 之前，先重建 PnL 基准：
+        # 对 running 实例调用 recompute，刷新 pnl_accounted 标记和 PnlRecord 基准，
+        # 确保重启前未核算的成交被纳入。异常不应阻断 startup。
+        try:
+            await strategy_engine.rebuild_pnl_baselines()
+        except Exception as e:
+            print(f"[startup] rebuild_pnl_baselines failed: {e}")
+
         for inst in orphaned:
             inst.status = "stopped"
             inst.stopped_at = datetime.now(timezone.utc)

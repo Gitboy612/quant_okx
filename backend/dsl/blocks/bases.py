@@ -227,7 +227,7 @@ class GridBlock:
                     if j < len(data) and data[j].get("sCode") == "0":
                         oid = data[j].get("ordId", "")
                         self.active_buy[o["idx"]] = oid
-                        ctx.order_manager.add_order(oid, "", symbol, "buy", o["px"], str(self.order_qty), "live")
+                        await ctx.order_manager.add_order(oid, "", symbol, "buy", o["px"], str(self.order_qty), "live")
             await asyncio.sleep(0.15)
 
         for batch_start in range(0, len(sell_orders), BATCH):
@@ -241,7 +241,7 @@ class GridBlock:
                     if j < len(data) and data[j].get("sCode") == "0":
                         oid = data[j].get("ordId", "")
                         self.active_sell[o["idx"]] = oid
-                        ctx.order_manager.add_order(oid, "", symbol, "sell", o["px"], str(self.order_qty), "live")
+                        await ctx.order_manager.add_order(oid, "", symbol, "sell", o["px"], str(self.order_qty), "live")
             await asyncio.sleep(0.15)
 
     async def _restore_active_orders(self, ctx: ExecutionContext) -> None:
@@ -362,7 +362,7 @@ class GridBlock:
             if sell_resp.get("code") == "0":
                 sell_ord_id = sell_resp.get("data", [{}])[0].get("ordId", "")
                 self.active_sell[grid_idx + 1] = sell_ord_id
-                order_manager.add_order(sell_ord_id, "", symbol, "sell",
+                await order_manager.add_order(sell_ord_id, "", symbol, "sell",
                                         sell_price_str, str(self.order_qty), "live")
                 strategy._record_event("order_placed",
                     f"SELL 挂单: {symbol} ordId={sell_ord_id} px={sell_price} qty={self.order_qty}",
@@ -414,7 +414,7 @@ class GridBlock:
             if buy_resp.get("code") == "0":
                 buy_ord_id = buy_resp.get("data", [{}])[0].get("ordId", "")
                 self.active_buy[grid_idx - 1] = buy_ord_id
-                order_manager.add_order(buy_ord_id, "", symbol, "buy",
+                await order_manager.add_order(buy_ord_id, "", symbol, "buy",
                                         buy_price_str, str(self.order_qty), "live")
                 strategy._record_event("order_placed",
                     f"BUY 挂单: {symbol} ordId={buy_ord_id} px={buy_price} qty={self.order_qty}",

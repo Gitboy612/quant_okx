@@ -41,7 +41,7 @@ class GridStrategy(BaseStrategy):
         if side == "buy":
             if grid_idx in self._active_buy_orders:
                 del self._active_buy_orders[grid_idx]
-            self.record_order(symbol, "buy", "limit", px, sz, order_id=ordId, status="filled")
+            await self.record_order(symbol, "buy", "limit", px, sz, order_id=ordId, status="filled")
 
             sell_price = round(round((self._grid_levels[grid_idx] + self._grid_step) / self._grid_tick_size) * self._grid_tick_size, self._grid_tick_decimals)
             sell_price_str = f"{sell_price:.{self._grid_tick_decimals}f}"
@@ -57,7 +57,7 @@ class GridStrategy(BaseStrategy):
             if sell_resp.get("code") == "0":
                 sell_ord_id = sell_resp.get("data", [{}])[0].get("ordId", "")
                 self._active_sell_orders[grid_idx + 1] = sell_ord_id
-                self.record_order(symbol, "sell", "limit", sell_price,
+                await self.record_order(symbol, "sell", "limit", sell_price,
                                   self._grid_order_qty, order_id=sell_ord_id, status="live")
             else:
                 self._record_event("order_failed",
@@ -88,7 +88,7 @@ class GridStrategy(BaseStrategy):
                 sell_fee = self.order_manager.get_order_fee(ordId)
                 cycle_pnl = (px - buy_px_for_pnl) * sz - buy_fee - sell_fee
                 self.add_realized_pnl(cycle_pnl)
-            self.record_order(symbol, "sell", "limit", px, sz, order_id=ordId, status="filled")
+            await self.record_order(symbol, "sell", "limit", px, sz, order_id=ordId, status="filled")
 
             buy_price = round(round((self._grid_levels[grid_idx] - self._grid_step) / self._grid_tick_size) * self._grid_tick_size, self._grid_tick_decimals)
             buy_price_str = f"{buy_price:.{self._grid_tick_decimals}f}"
@@ -104,7 +104,7 @@ class GridStrategy(BaseStrategy):
             if buy_resp.get("code") == "0":
                 buy_ord_id = buy_resp.get("data", [{}])[0].get("ordId", "")
                 self._active_buy_orders[grid_idx - 1] = buy_ord_id
-                self.record_order(symbol, "buy", "limit", buy_price,
+                await self.record_order(symbol, "buy", "limit", buy_price,
                                   self._grid_order_qty, order_id=buy_ord_id, status="live")
             else:
                 self._record_event("order_failed",
@@ -245,7 +245,7 @@ class GridStrategy(BaseStrategy):
                             if j < len(data) and data[j].get("sCode") == "0":
                                 order_id = data[j].get("ordId", "")
                                 self._active_buy_orders[o["idx"]] = order_id
-                                self.record_order(symbol, "buy", "limit", o["level"], order_qty, order_id=order_id, status="live")
+                                await self.record_order(symbol, "buy", "limit", o["level"], order_qty, order_id=order_id, status="live")
                             else:
                                 s_code = data[j].get("sCode", "") if j < len(data) else ""
                                 s_msg = data[j].get("sMsg", "") if j < len(data) else ""
@@ -274,7 +274,7 @@ class GridStrategy(BaseStrategy):
                             if j < len(data) and data[j].get("sCode") == "0":
                                 order_id = data[j].get("ordId", "")
                                 self._active_sell_orders[o["idx"]] = order_id
-                                self.record_order(symbol, "sell", "limit", o["level"], order_qty, order_id=order_id, status="live")
+                                await self.record_order(symbol, "sell", "limit", o["level"], order_qty, order_id=order_id, status="live")
                             else:
                                 s_code = data[j].get("sCode", "") if j < len(data) else ""
                                 s_msg = data[j].get("sMsg", "") if j < len(data) else ""
@@ -334,39 +334,6 @@ class GridStrategy(BaseStrategy):
 
                 # Rebuild active_buy_orders and active_sell_orders from OrderManager
                 self._rebuild_active_dicts(symbol)
-
-                # 基于净持仓计算未实现盈亏（非挂单）
-                net_position, avg_buy_price = self.order_manager.get_position_summary()
-                if "-SWAP" in symbol:
-                    # 合约优先用 OKX positions 接口的 upl
-                    try:
-                        positions = await self.client.get_positions()
-                        unrealized_pnl = 0.0
-                        for pos in positions:
-                            pos_inst = pos.get("instId") if isinstance(pos, dict) else getattr(pos, "instId", None)
-                            if pos_inst == symbol:
-                                upl = pos.get("upl") if isinstance(pos, dict) else getattr(pos, "upl", None)
-                                if upl is not None:
-                                    unrealized_pnl = float(upl)
-                                break
-                    except Exception:
-                        # 接口失败时用本地净持仓兜底
-                        unrealized_pnl = (current_price - avg_buy_price) * net_position if net_position != 0 else 0.0
-                else:
-                    # 现货用本地净持仓计算
-                    unrealized_pnl = (current_price - avg_buy_price) * net_position if net_position != 0 else 0.0
-
-                # 扣除预估平仓手续费，使成交前后口径一致
-                if net_position != 0:
-                    estimated_close_fee = abs(net_position) * current_price * self._fee_rate
-                    unrealized_pnl -= estimated_close_fee
-
-                realized_pnl = self.get_realized_pnl()
-                total_equity = self._initial_equity + realized_pnl + unrealized_pnl
-                total_pnl = unrealized_pnl + realized_pnl
-                if self._should_record_pnl(total_pnl):
-                    self.record_pnl(total_equity, unrealized_pnl, realized_pnl)
-                    self._mark_pnl_recorded(total_pnl)
 
                 consecutive_errors = 0
 

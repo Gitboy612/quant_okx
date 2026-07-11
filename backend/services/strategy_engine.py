@@ -13,6 +13,7 @@ from strategies.arbitrage_strategy import ArbitrageStrategy
 from strategies.advanced_grid_hedge_strategy import AdvancedGridHedgeStrategy
 from dsl.executor import ComposableStrategy
 from fastapi import HTTPException
+from services.pnl_accounting_engine import pnl_accounting_engine
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,8 @@ class StrategyEngine:
     _instance = None
     _tasks: dict[int, tuple[asyncio.Task, object]] = {}
     _account_clients: dict[str, OKXClient] = {}
+    _pnl_sampling_task: asyncio.Task | None = None
+    _last_heartbeat_ts: dict[int, float] = {}
     _strategy_map = {
         "grid": GridStrategy,
         "trend": TrendStrategy,
@@ -53,6 +56,95 @@ class StrategyEngine:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
+
+    def _get_client_for_strategy(self, strategy_instance_id: int) -> OKXClient | None:
+        """从内存中的策略对象获取其使用的 OKXClient。"""
+        entry = self._tasks.get(strategy_instance_id)
+        if entry:
+            _, strategy = entry
+            return strategy.client
+        return None
+
+    def start_pnl_sampling(self):
+        """启动 PnL 采样后台任务（若未运行或已完成则创建新任务）。"""
+        if self._pnl_sampling_task is None or self._pnl_sampling_task.done():
+            self._pnl_sampling_task = asyncio.create_task(self._pnl_sampling_loop())
+
+    async def _pnl_sampling_loop(self):
+        """PnL 采样循环：每 60s 对 running 策略执行增量核算，无成交时每 5 分钟写心跳快照。"""
+        while True:
+            try:
+                await asyncio.sleep(60)
+                running_ids = self.get_running_ids()
+                import time
+                now_ts = time.time()
+                for sid in running_ids:
+                    try:
+                        client = self._get_client_for_strategy(sid)
+                        snapshot = await pnl_accounting_engine.incremental_update(sid, client)
+                        if snapshot is not None:
+                            # 有成交增量，重置心跳计时器
+                            self._last_heartbeat_ts[sid] = now_ts
+                        else:
+                            # 无成交，检查是否需要心跳快照（≥5分钟）
+                            last_hb = self._last_heartbeat_ts.get(sid, 0)
+                            if now_ts - last_hb >= 300:  # 5分钟
+                                await pnl_accounting_engine.heartbeat_snapshot(sid, client)
+                                self._last_heartbeat_ts[sid] = now_ts
+                    except Exception as e:
+                        logger.error(f"PnL sampling error for strategy {sid}: {e}")
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"PnL sampling loop error: {e}")
+                await asyncio.sleep(10)  # 短暂等待后重试
+
+    async def rebuild_pnl_baselines(self):
+        """服务重启后重建 running 策略的 PnL 基准。
+
+        查询 DB 中所有 status='running' 的策略实例（服务重启后内存丢失的情况），
+        对每个实例调用 pnl_accounting_engine.recompute 重建基准。
+        client 获取：优先用 _get_client_for_strategy（内存中已加载），
+        否则用 _get_client_for_account 按账户构造。
+        """
+        db = SessionLocal()
+        try:
+            instances = (
+                db.query(StrategyInstance)
+                .filter(StrategyInstance.status == "running")
+                .all()
+            )
+            instance_ids = [inst.id for inst in instances]
+        finally:
+            db.close()
+
+        for instance_id in instance_ids:
+            try:
+                client = self._get_client_for_strategy(instance_id)
+                if client is None:
+                    # 内存中无此策略对象，按账户构造 client
+                    db = SessionLocal()
+                    try:
+                        instance = (
+                            db.query(StrategyInstance)
+                            .filter(StrategyInstance.id == instance_id)
+                            .first()
+                        )
+                        if instance:
+                            account = (
+                                db.query(Account)
+                                .filter(Account.id == instance.account_id)
+                                .first()
+                            )
+                            if account:
+                                client = self._get_client_for_account(
+                                    account, strategy_instance_id=instance_id
+                                )
+                    finally:
+                        db.close()
+                await pnl_accounting_engine.recompute(instance_id, client)
+            except Exception as e:
+                logger.error(f"rebuild_pnl_baselines error for strategy {instance_id}: {e}")
 
     def _get_client_for_account(self, account: "Account", strategy_instance_id: int | None = None) -> OKXClient:
         """按账户复用 OKXClient，避免每个实例/每次调用都新建连接导致句柄泄漏。
@@ -76,7 +168,14 @@ class StrategyEngine:
         return client
 
     async def aclose(self):
-        """引擎关闭时清理所有按账户缓存的 OKXClient，释放 httpx 连接。"""
+        """引擎关闭时取消采样任务并清理所有按账户缓存的 OKXClient，释放 httpx 连接。"""
+        if self._pnl_sampling_task:
+            self._pnl_sampling_task.cancel()
+            try:
+                await self._pnl_sampling_task
+            except asyncio.CancelledError:
+                pass
+            self._pnl_sampling_task = None
         clients = list(self._account_clients.values())
         self._account_clients.clear()
         for client in clients:
@@ -241,13 +340,22 @@ class StrategyEngine:
             task = asyncio.create_task(strategy.execute())
             self._tasks[instance_id] = (task, strategy)
 
+            # 启动 PnL 采样后台任务（若尚未运行）
+            self.start_pnl_sampling()
+
         finally:
             db.close()
 
     async def pause_strategy(self, instance_id: int):
         entry = self._tasks.get(instance_id)
         if entry:
-            entry[1].pause()
+            strategy = entry[1]
+            # 暂停前先增量核算，确保最近成交被记录
+            try:
+                await pnl_accounting_engine.incremental_update(instance_id, strategy.client)
+            except Exception as e:
+                logger.error(f"pause_strategy incremental_update error for {instance_id}: {e}")
+            strategy.pause()
         # Always update DB status, even if task not in memory (server restart)
         db = SessionLocal()
         try:
@@ -275,6 +383,11 @@ class StrategyEngine:
         entry = self._tasks.get(instance_id)
         if entry:
             task, strategy = entry
+            # 停止前先增量核算，确保最后的成交被记录（strategy.stop 内部会 record_final_pnl）
+            try:
+                await pnl_accounting_engine.incremental_update(instance_id, strategy.client)
+            except Exception as e:
+                logger.error(f"stop_strategy incremental_update error for {instance_id}: {e}")
             strategy.stop()
             # Disconnect WebSocket
             if strategy.ws_client:
