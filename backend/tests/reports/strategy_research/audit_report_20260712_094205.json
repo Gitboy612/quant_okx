@@ -1,0 +1,37 @@
+{
+  "audit_type": "hourly_third_party_audit",
+  "started_at": "2026-07-12T09:42:05.388507+00:00",
+  "version": "1.0",
+  "checks": {
+    "order_uniqueness": {
+      "check": "order_uniqueness",
+      "passed": true,
+      "duplicate_claims": [],
+      "orphan_orders": [],
+      "total_orders_checked": 0
+    },
+    "pnl_correctness": {
+      "check": "pnl_correctness",
+      "passed": true,
+      "per_strategy": [],
+      "total_checked": 0,
+      "tolerance": 0.5
+    },
+    "position_isolation": {
+      "check": "position_isolation",
+      "passed": true,
+      "per_symbol": [],
+      "total_checked": 0,
+      "tolerance": 0.0001
+    },
+    "capital_constraints": {
+      "check": "capital_constraints",
+      "passed": true,
+      "violations": [],
+      "total_checked": 0
+    }
+  },
+  "finished_at": "2026-07-12T09:42:05.397303+00:00",
+  "duration_seconds": 0.009,
+  "overall_passed": true
+}

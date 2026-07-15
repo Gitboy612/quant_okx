@@ -309,7 +309,8 @@ class OKXClient:
 
     async def place_order(self, inst_id: str, side: str, ord_type: str, sz: str, px: str | None = None) -> dict:
         await self._ensure_time_synced()
-        body_px = px if (px and ord_type == "limit") else None
+        # post_only 同 limit 一样需要 px（Task 9: maker-only 下单）
+        body_px = px if (px and ord_type in ("limit", "post_only")) else None
         return await self.trade.place_order(
             instId=inst_id,
             tdMode="cross",
@@ -350,3 +351,15 @@ class OKXClient:
     async def get_orders_history(self, inst_id: str, limit: str = "50") -> list:
         await self._ensure_time_synced()
         return await self.trade.get_orders_history(instId=inst_id, limit=limit)
+
+    async def set_leverage(self, inst_id: str, lever: int, mgn_mode: str = "cross", pos_side: str | None = None) -> dict:
+        """转发至 TradeAPI.set_leverage，设置合约杠杆（SubTask 2.2）。"""
+        await self._ensure_time_synced()
+        return await self.trade.set_leverage(
+            inst_id=inst_id, lever=lever, mgn_mode=mgn_mode, pos_side=pos_side,
+        )
+
+    async def get_position_risk(self, inst_id: str) -> dict | None:
+        """转发至 AccountAPI.get_position_risk，查询保证金占用率与强平价（SubTask 3.2）。"""
+        await self._ensure_time_synced()
+        return await self.account.get_position_risk(inst_id=inst_id)

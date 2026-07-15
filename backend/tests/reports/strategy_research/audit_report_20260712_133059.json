@@ -1,0 +1,251 @@
+{
+  "audit_type": "hourly_third_party_audit",
+  "started_at": "2026-07-12T13:30:59.928213+00:00",
+  "version": "1.0",
+  "checks": {
+    "order_uniqueness": {
+      "check": "order_uniqueness",
+      "passed": true,
+      "duplicate_claims": [],
+      "orphan_orders": [],
+      "total_orders_checked": 294
+    },
+    "pnl_correctness": {
+      "check": "pnl_correctness",
+      "passed": true,
+      "per_strategy": [
+        {
+          "strategy_instance_id": 2,
+          "symbol": "BTC-USDT-SWAP",
+          "latest_realized": 0.3562984714285871,
+          "recomputed_realized": 0.3562984714285871,
+          "diff": 0.0,
+          "latest_net_position": 0.001,
+          "recomputed_net_position": 0.001,
+          "matched": true
+        },
+        {
+          "strategy_instance_id": 3,
+          "symbol": "BTC-USDT-SWAP",
+          "latest_realized": 0.0,
+          "recomputed_realized": null,
+          "diff": null,
+          "matched": true,
+          "note": "no_filled_orders"
+        },
+        {
+          "strategy_instance_id": 4,
+          "symbol": "BTC-USDT-SWAP",
+          "latest_realized": 0.0,
+          "recomputed_realized": null,
+          "diff": null,
+          "matched": true,
+          "note": "no_filled_orders"
+        },
+        {
+          "strategy_instance_id": 5,
+          "symbol": "BTC-USDT-SWAP",
+          "latest_realized": 0.0,
+          "recomputed_realized": null,
+          "diff": null,
+          "matched": true,
+          "note": "no_filled_orders"
+        },
+        {
+          "strategy_instance_id": 6,
+          "symbol": "BTC-USDT-SWAP",
+          "latest_realized": 0.0,
+          "recomputed_realized": null,
+          "diff": null,
+          "matched": true,
+          "note": "no_filled_orders"
+        },
+        {
+          "strategy_instance_id": 7,
+          "symbol": "BTC-USDT-SWAP",
+          "latest_realized": 0.0,
+          "recomputed_realized": null,
+          "diff": null,
+          "matched": true,
+          "note": "no_filled_orders"
+        },
+        {
+          "strategy_instance_id": 8,
+          "symbol": "BTC-USDT-SWAP",
+          "latest_realized": 0.0,
+          "recomputed_realized": null,
+          "diff": null,
+          "matched": true,
+          "note": "no_filled_orders"
+        },
+        {
+          "strategy_instance_id": 9,
+          "symbol": "BTC-USDT-SWAP",
+          "latest_realized": 0.0,
+          "recomputed_realized": null,
+          "diff": null,
+          "matched": true,
+          "note": "no_filled_orders"
+        },
+        {
+          "strategy_instance_id": 10,
+          "symbol": "BTC-USDT-SWAP",
+          "latest_realized": 0.0,
+          "recomputed_realized": null,
+          "diff": null,
+          "matched": true,
+          "note": "no_filled_orders"
+        },
+        {
+          "strategy_instance_id": 11,
+          "symbol": "BTC-USDT-SWAP",
+          "latest_realized": 0.0,
+          "recomputed_realized": null,
+          "diff": null,
+          "matched": true,
+          "note": "no_filled_orders"
+        },
+        {
+          "strategy_instance_id": 12,
+          "symbol": "BTC-USDT-SWAP",
+          "latest_realized": 0.0,
+          "recomputed_realized": null,
+          "diff": null,
+          "matched": true,
+          "note": "no_filled_orders"
+        },
+        {
+          "strategy_instance_id": 13,
+          "symbol": "BTC-USDT-SWAP",
+          "latest_realized": 0.0,
+          "recomputed_realized": null,
+          "diff": null,
+          "matched": true,
+          "note": "no_filled_orders"
+        },
+        {
+          "strategy_instance_id": 14,
+          "symbol": "BTC-USDT-SWAP",
+          "latest_realized": 0.0,
+          "recomputed_realized": null,
+          "diff": null,
+          "matched": true,
+          "note": "no_filled_orders"
+        },
+        {
+          "strategy_instance_id": 15,
+          "symbol": "BTC-USDT-SWAP",
+          "latest_realized": 0.0,
+          "recomputed_realized": null,
+          "diff": null,
+          "matched": true,
+          "note": "no_filled_orders"
+        },
+        {
+          "strategy_instance_id": 16,
+          "symbol": "BTC-USDT-SWAP",
+          "latest_realized": 0.0,
+          "recomputed_realized": null,
+          "diff": null,
+          "matched": true,
+          "note": "no_filled_orders"
+        },
+        {
+          "strategy_instance_id": 17,
+          "symbol": "BTC-USDT-SWAP",
+          "latest_realized": 0.0,
+          "recomputed_realized": null,
+          "diff": null,
+          "matched": true,
+          "note": "no_filled_orders"
+        },
+        {
+          "strategy_instance_id": 18,
+          "symbol": "BTC-USDT-SWAP",
+          "latest_realized": 0.0,
+          "recomputed_realized": null,
+          "diff": null,
+          "matched": true,
+          "note": "no_filled_orders"
+        },
+        {
+          "strategy_instance_id": 19,
+          "symbol": "BTC-USDT-SWAP",
+          "latest_realized": 0.0,
+          "recomputed_realized": null,
+          "diff": null,
+          "matched": true,
+          "note": "no_filled_orders"
+        },
+        {
+          "strategy_instance_id": 20,
+          "symbol": "BTC-USDT-SWAP",
+          "latest_realized": 0.0,
+          "recomputed_realized": null,
+          "diff": null,
+          "matched": true,
+          "note": "no_filled_orders"
+        },
+        {
+          "strategy_instance_id": 21,
+          "symbol": "BTC-USDT-SWAP",
+          "latest_realized": 0.0,
+          "recomputed_realized": null,
+          "diff": null,
+          "matched": true,
+          "note": "no_filled_orders"
+        }
+      ],
+      "total_checked": 20,
+      "tolerance": 0.5
+    },
+    "position_isolation": {
+      "check": "position_isolation",
+      "passed": true,
+      "per_symbol": [
+        {
+          "account_id": 1,
+          "symbol": "BTC-USDT-SWAP",
+          "virtual_total": 0.001,
+          "real_total": 0.001,
+          "diff": 0.0,
+          "matched": true
+        }
+      ],
+      "total_checked": 1,
+      "tolerance": 0.0001
+    },
+    "capital_constraints": {
+      "check": "capital_constraints",
+      "passed": true,
+      "violations": [],
+      "total_checked": 20
+    },
+    "okx_trade_records": {
+      "check": "okx_trade_records",
+      "passed": true,
+      "per_symbol": [
+        {
+          "account_id": 1,
+          "symbol": "BTC-USDT-SWAP",
+          "okx_fills_count": 4,
+          "db_orders_count": 292,
+          "orphan_okx_fills": [],
+          "db_only_orders": [],
+          "price_mismatches": [],
+          "okx_realized_pnl": 0.0,
+          "db_realized_pnl": 0.356298,
+          "diff": 0.356298,
+          "matched": true
+        }
+      ],
+      "total_okx_realized_pnl": 0.0,
+      "total_db_realized_pnl": 0.356298,
+      "total_diff": 0.356298,
+      "tolerance": 0.5
+    }
+  },
+  "finished_at": "2026-07-12T13:31:14.676340+00:00",
+  "duration_seconds": 14.748,
+  "overall_passed": true
+}

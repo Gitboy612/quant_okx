@@ -80,18 +80,28 @@ def get_pnl_records(
 @router.get("/summary")
 def get_pnl_summary(
     account_id: int | None = Query(None),
+    strategy_instance_id: int | None = Query(None),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     query = db.query(PnlRecord)
     if account_id is not None:
         query = query.filter(PnlRecord.account_id == account_id)
+    # 按策略实例筛选汇总
+    if strategy_instance_id is not None:
+        query = query.filter(PnlRecord.strategy_instance_id == strategy_instance_id)
 
     records = query.order_by(PnlRecord.recorded_at.desc()).limit(500).all()
     if not records:
         return {"total_realized_pnl": 0, "total_unrealized_pnl": 0, "total_pnl": 0, "latest_equity": 0, "by_strategy": []}
 
+    # summary 基准：跳过全 0 无意义记录（total_pnl=0 且 net_position=0 且 order_count=0），
+    # 向前追溯最近的有效记录；若全部为全 0 则退化为第一条（值均为 0，不影响汇总）
     latest = records[0]
+    for r in records:
+        if not ((r.total_pnl or 0) == 0 and (r.net_position or 0) == 0 and (r.order_count or 0) == 0):
+            latest = r
+            break
     # realized_pnl 与 unrealized_pnl 均取最新时点值（unrealized 是时点浮动值，不能跨记录求和）
     total_realized = latest.realized_pnl or 0
     total_unrealized = latest.unrealized_pnl or 0
@@ -136,6 +146,9 @@ async def recompute_pnl(
 
     client = await pnl_accounting_engine._get_client(strategy_id)
     snapshot = await pnl_accounting_engine.recompute(strategy_id, client)
+    # 无成交订单时不返回全 0，返回失败信息
+    if snapshot is None:
+        return {"success": False, "message": "无成交订单"}
     return _snapshot_to_dict(snapshot)
 
 

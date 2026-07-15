@@ -1,0 +1,141 @@
+{
+  "check_type": "scheduled_function_check",
+  "started_at": "2026-07-12T16:36:53.271037+00:00",
+  "version": "1.0",
+  "checks": {
+    "theoretical_vs_actual_orders": {
+      "check": "theoretical_vs_actual_orders",
+      "passed": false,
+      "per_strategy": [
+        {
+          "strategy_instance_id": 2,
+          "symbol": "ETH-USDT-SWAP",
+          "current_price": 2970.0,
+          "theoretical_buy_levels": [],
+          "theoretical_sell_levels": [
+            2973.0,
+            2976.0,
+            2979.0,
+            2982.0,
+            2985.0,
+            2988.0,
+            2991.0,
+            2994.0,
+            2997.0,
+            3000.0,
+            3003.0,
+            3006.0,
+            3009.0,
+            3012.0,
+            3015.0,
+            3018.0,
+            3021.0,
+            3024.0,
+            3027.0,
+            3030.0
+          ],
+          "actual_live_orders": 21,
+          "missing_orders": [],
+          "extra_orders": [
+            {
+              "side": "sell",
+              "actual_price": 2970.0
+            }
+          ],
+          "price_mismatches": [
+            {
+              "order_id": "3736988782383206400",
+              "expected": 2973.0,
+              "actual": 2970.0,
+              "diff": 3.0
+            }
+          ],
+          "matched": false
+        },
+        {
+          "strategy_instance_id": 3,
+          "symbol": "BTC-USDT",
+          "current_price": 64350.0,
+          "theoretical_buy_levels": [],
+          "theoretical_sell_levels": [
+            64415.0,
+            64480.0,
+            64545.0,
+            64610.0,
+            64675.0,
+            64740.0,
+            64805.0,
+            64870.0,
+            64935.0,
+            65000.0,
+            65065.0,
+            65130.0,
+            65195.0,
+            65260.0,
+            65325.0,
+            65390.0,
+            65455.0,
+            65520.0,
+            65585.0,
+            65650.0
+          ],
+          "actual_live_orders": 21,
+          "missing_orders": [],
+          "extra_orders": [
+            {
+              "side": "sell",
+              "actual_price": 64350.0
+            }
+          ],
+          "price_mismatches": [
+            {
+              "order_id": "3736990458192203776",
+              "expected": 64415.0,
+              "actual": 64350.0,
+              "diff": 65.0
+            }
+          ],
+          "matched": false
+        }
+      ]
+    },
+    "strategy_errors": {
+      "check": "strategy_errors",
+      "passed": true,
+      "error_count": 0,
+      "errors_by_type": [],
+      "recent_errors": []
+    },
+    "actual_pnl": {
+      "check": "actual_pnl",
+      "passed": true,
+      "per_strategy": [
+        {
+          "strategy_instance_id": 2,
+          "symbol": "ETH-USDT-SWAP",
+          "okx_realized_pnl": 0.0,
+          "db_realized_pnl": 0.0,
+          "diff": 0.0,
+          "matched": true,
+          "trade_count": 0
+        },
+        {
+          "strategy_instance_id": 3,
+          "symbol": "BTC-USDT",
+          "okx_realized_pnl": 0.0,
+          "db_realized_pnl": 0.0,
+          "diff": 0.0,
+          "matched": true,
+          "trade_count": 0
+        }
+      ],
+      "total_okx_pnl": 0.0,
+      "total_db_pnl": 0.0,
+      "total_diff": 0.0,
+      "tolerance": 0.5
+    }
+  },
+  "finished_at": "2026-07-12T16:36:55.905112+00:00",
+  "duration_seconds": 2.634,
+  "overall_passed": false
+}

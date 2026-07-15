@@ -1,4 +1,4 @@
-﻿interface StatusBadgeProps {
+interface StatusBadgeProps {
   status: string
 }
 
@@ -7,6 +7,7 @@ const statusConfig: Record<string, { label: string; dotColor: string; textColor:
   paused: { label: '已暂停', dotColor: 'bg-[#F0A500]', textColor: 'text-[#F0A500]', bgColor: 'bg-[#F0A500]/10', glow: false },
   stopped: { label: '已停止', dotColor: 'bg-[#505C78]', textColor: 'text-[#7B86A2]', bgColor: 'bg-[#505C78]/10', glow: false },
   error: { label: '异常', dotColor: 'bg-[#FF4060]', textColor: 'text-[#FF4060]', bgColor: 'bg-[#FF4060]/10', glow: true },
+  conflict: { label: '仓位冲突', dotColor: 'bg-[#FF4060]', textColor: 'text-[#FF4060]', bgColor: 'bg-[#FF4060]/10', glow: true },
 }
 
 export default function StatusBadge({ status }: StatusBadgeProps) {

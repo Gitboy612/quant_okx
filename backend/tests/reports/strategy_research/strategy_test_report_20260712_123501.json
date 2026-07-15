@@ -1,0 +1,357 @@
+{
+  "generated_at": "2026-07-12T12:35:01.084395+00:00",
+  "symbol": "BTC-USDT-SWAP",
+  "scenarios": [
+    {
+      "scenario": "pause_on_high",
+      "result": "PASS",
+      "triggered_correctly": true,
+      "expected_triggers": [
+        "pause_orders"
+      ],
+      "actual_triggers": [
+        "pause_orders"
+      ]
+    },
+    {
+      "scenario": "resume_on_low",
+      "result": "PASS",
+      "triggered_correctly": true,
+      "expected_triggers": [
+        "resume_orders"
+      ],
+      "actual_triggers": [
+        "resume_orders"
+      ]
+    },
+    {
+      "scenario": "rebalance_on_threshold",
+      "result": "PASS",
+      "triggered_correctly": true,
+      "expected_triggers": [
+        "rebalance_position"
+      ],
+      "actual_triggers": [
+        "rebalance_position"
+      ]
+    },
+    {
+      "scenario": "compound_rules",
+      "result": "TRIGGER_MISMATCH",
+      "triggered_correctly": false,
+      "expected_triggers": [
+        "pause_orders",
+        "resume_orders",
+        "rebalance_position"
+      ],
+      "actual_triggers": [
+        "pause_orders"
+      ]
+    }
+  ],
+  "results": {
+    "pause_on_high": {
+      "scenario": "pause_on_high",
+      "symbol": "BTC-USDT-SWAP",
+      "started_at": "2026-07-12T12:30:39.454632+00:00",
+      "steps": [
+        {
+          "name": "generate_qsm",
+          "status": "OK",
+          "qsm_name": "strategy_test_pause_on_high"
+        },
+        {
+          "name": "resolve_variables",
+          "status": "OK"
+        },
+        {
+          "name": "dsl_validate",
+          "status": "OK"
+        },
+        {
+          "name": "dsl_dry_run",
+          "status": "OK",
+          "total_ticks": 720
+        },
+        {
+          "name": "create_instance",
+          "status": "OK",
+          "template_id": 7,
+          "instance_id": 3
+        },
+        {
+          "name": "start_strategy",
+          "status": "OK",
+          "instance_id": 3
+        },
+        {
+          "name": "wait_run",
+          "status": "OK",
+          "seconds": 60
+        },
+        {
+          "name": "verify_triggers",
+          "status": "OK",
+          "expected": [
+            "pause_orders"
+          ],
+          "actual": [
+            "pause_orders"
+          ]
+        }
+      ],
+      "result": "PASS",
+      "verify": {
+        "scenario": "pause_on_high",
+        "expected_triggers": [
+          "pause_orders"
+        ],
+        "actual_triggers": [
+          "pause_orders"
+        ],
+        "triggered_correctly": true,
+        "events": [
+          {
+            "id": 15,
+            "event_type": "dsl_action",
+            "message": "pause_orders: BTC-USDT-SWAP",
+            "created_at": "2026-07-12T12:30:56.611633"
+          }
+        ]
+      }
+    },
+    "resume_on_low": {
+      "scenario": "resume_on_low",
+      "symbol": "BTC-USDT-SWAP",
+      "started_at": "2026-07-12T12:31:42.919305+00:00",
+      "steps": [
+        {
+          "name": "generate_qsm",
+          "status": "OK",
+          "qsm_name": "strategy_test_resume_on_low"
+        },
+        {
+          "name": "resolve_variables",
+          "status": "OK"
+        },
+        {
+          "name": "dsl_validate",
+          "status": "OK"
+        },
+        {
+          "name": "dsl_dry_run",
+          "status": "OK",
+          "total_ticks": 720
+        },
+        {
+          "name": "create_instance",
+          "status": "OK",
+          "template_id": 8,
+          "instance_id": 4
+        },
+        {
+          "name": "start_strategy",
+          "status": "OK",
+          "instance_id": 4
+        },
+        {
+          "name": "wait_run",
+          "status": "OK",
+          "seconds": 60
+        },
+        {
+          "name": "verify_triggers",
+          "status": "OK",
+          "expected": [
+            "resume_orders"
+          ],
+          "actual": [
+            "resume_orders"
+          ]
+        }
+      ],
+      "result": "PASS",
+      "verify": {
+        "scenario": "resume_on_low",
+        "expected_triggers": [
+          "resume_orders"
+        ],
+        "actual_triggers": [
+          "resume_orders"
+        ],
+        "triggered_correctly": true,
+        "events": [
+          {
+            "id": 23,
+            "event_type": "dsl_action",
+            "message": "resume_orders: BTC-USDT-SWAP",
+            "created_at": "2026-07-12T12:32:14.306191"
+          },
+          {
+            "id": 25,
+            "event_type": "dsl_action",
+            "message": "resume_orders: BTC-USDT-SWAP",
+            "created_at": "2026-07-12T12:32:29.361408"
+          },
+          {
+            "id": 29,
+            "event_type": "dsl_action",
+            "message": "resume_orders: BTC-USDT-SWAP",
+            "created_at": "2026-07-12T12:32:40.625594"
+          }
+        ]
+      }
+    },
+    "rebalance_on_threshold": {
+      "scenario": "rebalance_on_threshold",
+      "symbol": "BTC-USDT-SWAP",
+      "started_at": "2026-07-12T12:32:45.942864+00:00",
+      "steps": [
+        {
+          "name": "generate_qsm",
+          "status": "OK",
+          "qsm_name": "strategy_test_rebalance_on_threshold"
+        },
+        {
+          "name": "resolve_variables",
+          "status": "OK"
+        },
+        {
+          "name": "dsl_validate",
+          "status": "OK"
+        },
+        {
+          "name": "dsl_dry_run",
+          "status": "OK",
+          "total_ticks": 720
+        },
+        {
+          "name": "create_instance",
+          "status": "OK",
+          "template_id": 9,
+          "instance_id": 5
+        },
+        {
+          "name": "start_strategy",
+          "status": "OK",
+          "instance_id": 5
+        },
+        {
+          "name": "wait_run",
+          "status": "OK",
+          "seconds": 60
+        },
+        {
+          "name": "verify_triggers",
+          "status": "OK",
+          "expected": [
+            "rebalance_position"
+          ],
+          "actual": [
+            "rebalance_position"
+          ]
+        }
+      ],
+      "result": "PASS",
+      "verify": {
+        "scenario": "rebalance_on_threshold",
+        "expected_triggers": [
+          "rebalance_position"
+        ],
+        "actual_triggers": [
+          "rebalance_position"
+        ],
+        "triggered_correctly": true,
+        "events": [
+          {
+            "id": 39,
+            "event_type": "dsl_action",
+            "message": "rebalance_position: buy 0.4 BTC-USDT-SWAP (delta=0.4)",
+            "created_at": "2026-07-12T12:33:33.265980"
+          }
+        ]
+      }
+    },
+    "compound_rules": {
+      "scenario": "compound_rules",
+      "symbol": "BTC-USDT-SWAP",
+      "started_at": "2026-07-12T12:33:53.895903+00:00",
+      "steps": [
+        {
+          "name": "generate_qsm",
+          "status": "OK",
+          "qsm_name": "strategy_test_compound_rules"
+        },
+        {
+          "name": "resolve_variables",
+          "status": "OK"
+        },
+        {
+          "name": "dsl_validate",
+          "status": "OK"
+        },
+        {
+          "name": "dsl_dry_run",
+          "status": "OK",
+          "total_ticks": 720
+        },
+        {
+          "name": "create_instance",
+          "status": "OK",
+          "template_id": 10,
+          "instance_id": 6
+        },
+        {
+          "name": "start_strategy",
+          "status": "OK",
+          "instance_id": 6
+        },
+        {
+          "name": "wait_run",
+          "status": "OK",
+          "seconds": 60
+        },
+        {
+          "name": "verify_triggers",
+          "status": "FAIL",
+          "expected": [
+            "pause_orders",
+            "resume_orders",
+            "rebalance_position"
+          ],
+          "actual": [
+            "pause_orders"
+          ]
+        }
+      ],
+      "result": "TRIGGER_MISMATCH",
+      "verify": {
+        "scenario": "compound_rules",
+        "expected_triggers": [
+          "pause_orders",
+          "resume_orders",
+          "rebalance_position"
+        ],
+        "actual_triggers": [
+          "pause_orders"
+        ],
+        "triggered_correctly": false,
+        "events": [
+          {
+            "id": 46,
+            "event_type": "dsl_action",
+            "message": "pause_orders: BTC-USDT-SWAP",
+            "created_at": "2026-07-12T12:34:42.169166"
+          }
+        ]
+      }
+    }
+  },
+  "summary": {
+    "pause_on_high": "PASS",
+    "resume_on_low": "PASS",
+    "rebalance_on_threshold": "PASS",
+    "compound_rules": "TRIGGER_MISMATCH"
+  },
+  "overall_passed": false
+}

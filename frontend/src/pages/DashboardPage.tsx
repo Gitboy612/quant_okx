@@ -131,8 +131,7 @@ export default function DashboardPage() {
       <div className="flex flex-col lg:flex-row gap-5">
         <PnLCurveSection
           pnlRecords={state.pnlRecords}
-          timeRange={state.timeRange}
-          setTimeRange={state.setTimeRange}
+          loading={state.pnlLoading}
         />
 
         <motion.div

@@ -1,0 +1,499 @@
+{
+  "check_type": "scheduled_function_check",
+  "started_at": "2026-07-12T16:34:40.313946+00:00",
+  "version": "1.0",
+  "checks": {
+    "theoretical_vs_actual_orders": {
+      "check": "theoretical_vs_actual_orders",
+      "passed": false,
+      "per_strategy": [
+        {
+          "strategy_instance_id": 2,
+          "symbol": "ETH-USDT-SWAP",
+          "current_price": 0.0,
+          "theoretical_buy_levels": [],
+          "theoretical_sell_levels": [],
+          "actual_live_orders": 21,
+          "missing_orders": [],
+          "extra_orders": [
+            {
+              "side": "sell",
+              "actual_price": 2970.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 2973.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 2976.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 2991.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 2988.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 2994.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 2997.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 2985.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 2982.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 3000.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 3003.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 3018.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 3027.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 2979.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 3024.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 3012.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 3006.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 3015.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 3009.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 3021.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 3030.0
+            }
+          ],
+          "price_mismatches": [
+            {
+              "order_id": "3736988782383206400",
+              "expected": null,
+              "actual": 2970.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736988782383206401",
+              "expected": null,
+              "actual": 2973.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736988782383206402",
+              "expected": null,
+              "actual": 2976.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736988782383206407",
+              "expected": null,
+              "actual": 2991.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736988782383206406",
+              "expected": null,
+              "actual": 2988.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736988782383206408",
+              "expected": null,
+              "actual": 2994.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736988782383206409",
+              "expected": null,
+              "actual": 2997.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736988782383206405",
+              "expected": null,
+              "actual": 2985.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736988782383206404",
+              "expected": null,
+              "actual": 2982.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736988782383206410",
+              "expected": null,
+              "actual": 3000.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736988782383206411",
+              "expected": null,
+              "actual": 3003.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736988782383206416",
+              "expected": null,
+              "actual": 3018.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736988782383206419",
+              "expected": null,
+              "actual": 3027.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736988782383206403",
+              "expected": null,
+              "actual": 2979.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736988782383206418",
+              "expected": null,
+              "actual": 3024.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736988782383206414",
+              "expected": null,
+              "actual": 3012.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736988782383206412",
+              "expected": null,
+              "actual": 3006.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736988782383206415",
+              "expected": null,
+              "actual": 3015.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736988782383206413",
+              "expected": null,
+              "actual": 3009.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736988782383206417",
+              "expected": null,
+              "actual": 3021.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736988798657105920",
+              "expected": null,
+              "actual": 3030.0,
+              "diff": null
+            }
+          ],
+          "matched": false
+        },
+        {
+          "strategy_instance_id": 3,
+          "symbol": "BTC-USDT",
+          "current_price": 0.0,
+          "theoretical_buy_levels": [],
+          "theoretical_sell_levels": [],
+          "actual_live_orders": 21,
+          "missing_orders": [],
+          "extra_orders": [
+            {
+              "side": "sell",
+              "actual_price": 64350.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 64480.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 64415.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 64675.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 64935.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 65065.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 64545.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 65000.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 65195.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 65390.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 64805.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 65455.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 65585.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 64870.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 65520.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 65130.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 65325.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 65260.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 64610.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 64740.0
+            },
+            {
+              "side": "sell",
+              "actual_price": 65650.0
+            }
+          ],
+          "price_mismatches": [
+            {
+              "order_id": "3736990458192203776",
+              "expected": null,
+              "actual": 64350.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736990458192203778",
+              "expected": null,
+              "actual": 64480.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736990458192203777",
+              "expected": null,
+              "actual": 64415.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736990458192203781",
+              "expected": null,
+              "actual": 64675.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736990458192203785",
+              "expected": null,
+              "actual": 64935.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736990458192203787",
+              "expected": null,
+              "actual": 65065.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736990458192203779",
+              "expected": null,
+              "actual": 64545.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736990458192203786",
+              "expected": null,
+              "actual": 65000.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736990458192203789",
+              "expected": null,
+              "actual": 65195.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736990458192203792",
+              "expected": null,
+              "actual": 65390.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736990458192203783",
+              "expected": null,
+              "actual": 64805.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736990458192203793",
+              "expected": null,
+              "actual": 65455.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736990458192203795",
+              "expected": null,
+              "actual": 65585.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736990458192203784",
+              "expected": null,
+              "actual": 64870.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736990458192203794",
+              "expected": null,
+              "actual": 65520.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736990458192203788",
+              "expected": null,
+              "actual": 65130.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736990458192203791",
+              "expected": null,
+              "actual": 65325.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736990458192203790",
+              "expected": null,
+              "actual": 65260.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736990458192203780",
+              "expected": null,
+              "actual": 64610.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736990458192203782",
+              "expected": null,
+              "actual": 64740.0,
+              "diff": null
+            },
+            {
+              "order_id": "3736990481881632768",
+              "expected": null,
+              "actual": 65650.0,
+              "diff": null
+            }
+          ],
+          "matched": false
+        }
+      ]
+    },
+    "strategy_errors": {
+      "check": "strategy_errors",
+      "passed": true,
+      "error_count": 0,
+      "errors_by_type": [],
+      "recent_errors": []
+    },
+    "actual_pnl": {
+      "check": "actual_pnl",
+      "passed": true,
+      "per_strategy": [
+        {
+          "strategy_instance_id": 2,
+          "symbol": "ETH-USDT-SWAP",
+          "okx_realized_pnl": 0.0,
+          "db_realized_pnl": 0.0,
+          "diff": 0.0,
+          "matched": true,
+          "trade_count": 0
+        },
+        {
+          "strategy_instance_id": 3,
+          "symbol": "BTC-USDT",
+          "okx_realized_pnl": 0.0,
+          "db_realized_pnl": 0.0,
+          "diff": 0.0,
+          "matched": true,
+          "trade_count": 0
+        }
+      ],
+      "total_okx_pnl": 0.0,
+      "total_db_pnl": 0.0,
+      "total_diff": 0.0,
+      "tolerance": 0.5
+    }
+  },
+  "finished_at": "2026-07-12T16:34:49.140366+00:00",
+  "duration_seconds": 8.826,
+  "overall_passed": false
+}

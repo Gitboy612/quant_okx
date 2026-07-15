@@ -1,11 +1,13 @@
 import asyncio
 import json
+import math
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from services.okx_client import OKXClient
+from services.okx.exceptions import OKXAPIException
 from database import SessionLocal
 
 if TYPE_CHECKING:
@@ -28,7 +30,34 @@ class BaseStrategy(ABC):
         self._initial_equity = 0.0
         self._last_pnl_record_ts: float = 0.0
         self._last_pnl_total: float = 0.0
+        # 保证金检查节流（SubTask 3.2）
+        self._last_margin_check_ts: float = 0.0
+        self._last_margin_check_result: bool = True
+        # 仓位冲突检查节流（SubTask 5.1）
+        self._last_conflict_check_ts: float = 0.0
+        self._last_conflict_check_result: bool = True
         self._fee_rate = float(self.params.get("fee_rate", 0.001))
+
+        # 旧实例参数迁移：检测缺失字段并补默认值（SubTask 1.4）
+        self._param_migrated = False
+        if "investment_amount" not in self.params:
+            self.params.setdefault("investment_amount", 0)
+            self.params.setdefault("lever", 1)
+            self.params.setdefault("td_mode", "cross")
+            self._param_migrated = True
+            self._record_event(
+                "param_migrated",
+                "旧实例参数迁移：补默认 investment_amount=0, lever=1, td_mode=cross",
+                {"added": {"investment_amount": 0, "lever": 1, "td_mode": "cross"}},
+            )
+
+        # 投入资金上限与持仓上限（SubTask 1.1）
+        self.investment_amount = float(self.params.get("investment_amount", 0))
+        self.max_position_value = float(self.params.get("max_position_value", 0))
+
+        # 合约杠杆与持仓模式（SubTask 2.2）
+        self.lever = int(self.params.get("lever", 1))
+        self.td_mode = str(self.params.get("td_mode", "cross"))
 
         # OrderManager setup
         if order_manager is not None:
@@ -104,6 +133,352 @@ class BaseStrategy(ABC):
         except Exception as e:
             print(f"[BaseStrategy] _fire_notification error: type={event_type} err={e}")
 
+    def get_virtual_position(self) -> dict:
+        """返回当前策略的虚拟持仓（SubTask 4.1）。
+
+        优先从最新 PnlRecord 读取（DB 已有 net_position/avg_buy_price/realized_pnl）；
+        无记录时返回 0/0/_realized_pnl。
+
+        Returns:
+            {"net_position": float, "avg_buy_price": float, "realized_pnl": float}
+        """
+        # 延迟导入 PnlRecord 避免循环依赖
+        from models.pnl import PnlRecord
+        try:
+            db = self.db_session_factory()
+            try:
+                latest = (
+                    db.query(PnlRecord)
+                    .filter(PnlRecord.strategy_instance_id == self.instance_id)
+                    .order_by(PnlRecord.recorded_at.desc())
+                    .first()
+                )
+            finally:
+                db.close()
+        except Exception as e:
+            print(f"[BaseStrategy] get_virtual_position 查询异常: {e}")
+            return {
+                "net_position": 0.0,
+                "avg_buy_price": 0.0,
+                "realized_pnl": float(self._realized_pnl or 0.0),
+            }
+
+        if latest is None:
+            return {
+                "net_position": 0.0,
+                "avg_buy_price": 0.0,
+                "realized_pnl": float(self._realized_pnl or 0.0),
+            }
+        return {
+            "net_position": float(latest.net_position or 0),
+            "avg_buy_price": float(latest.avg_buy_price or 0),
+            "realized_pnl": float(latest.realized_pnl or 0),
+        }
+
+    def _get_current_position_value(self, symbol: str) -> float:
+        """返回当前持仓名义价值（USDT），基于虚拟持仓 × 当前价（SubTask 4.1）。
+
+        - 优先用 self._latest_price（若策略子类已设置）
+        - 否则从 market_data_service.get_latest_ticker(symbol) 取最新价
+        - 取价失败时按 avg_buy_price 兜底（避免返回 0 漏检）
+        - net_position <= 0 时返回 0
+        """
+        virtual = self.get_virtual_position()
+        net_position = virtual.get("net_position", 0.0)
+        if not net_position or net_position <= 0:
+            return 0.0
+
+        # 1. 优先用策略子类维护的最新价
+        price = 0.0
+        latest_price = getattr(self, "_latest_price", None)
+        if latest_price:
+            try:
+                price = float(latest_price)
+            except (TypeError, ValueError):
+                price = 0.0
+
+        # 2. 回退到 market_data_service 缓存
+        if price <= 0:
+            try:
+                from services.market_data_service import market_data_service
+                ticker = market_data_service.get_latest_ticker(symbol)
+                if ticker:
+                    last_str = ticker.get("last") or ticker.get("lastPx")
+                    if last_str:
+                        price = float(last_str)
+            except Exception as e:
+                print(f"[BaseStrategy] _get_current_position_value 获取最新价异常: {e}")
+
+        # 3. 最终兜底：用 avg_buy_price（至少反映持仓成本）
+        if price <= 0:
+            price = float(virtual.get("avg_buy_price", 0.0))
+
+        return abs(net_position) * price
+
+    def check_capital_limit(self, symbol: str, side: str, qty: float, price: float) -> bool:
+        """资金上限校验：检查新单是否超出投入资金上限（SubTask 1.1）。
+
+        - investment_amount=0 时不限制（兼容存量策略）
+        - 上限 = investment_amount × (lever if 合约 else 1)
+        - 总名义价值 = 当前持仓 + 新单名义价值
+        - 超出时记录 capital_limit 事件并返回 False，未超返回 True
+        """
+        if self.investment_amount <= 0:
+            return True  # 不限制
+
+        new_value = qty * price
+        current_value = self._get_current_position_value(symbol)
+        total_value = current_value + new_value
+
+        # 合约按杠杆放大可动用名义价值；现货杠杆为 1
+        is_contract = "-SWAP" in symbol
+        lever = float(self.params.get("lever", 1)) if is_contract else 1.0
+        cap = self.investment_amount * lever
+
+        if total_value > cap:
+            self._record_event(
+                "capital_limit",
+                f"资金上限超出，拒绝下单: {symbol} {side} qty={qty} px={price} "
+                f"new_value={new_value} current_value={current_value} total={total_value} cap={cap}",
+                {
+                    "symbol": symbol, "side": side, "qty": qty, "price": price,
+                    "new_value": new_value, "current_value": current_value,
+                    "total_value": total_value, "cap": cap,
+                    "investment_amount": self.investment_amount, "lever": lever,
+                },
+            )
+            return False
+        return True
+
+    async def place_order_with_capital_check(self, symbol: str, side: str, ord_type: str, sz, px=None, **kwargs) -> dict:
+        """带资金上限校验的下单包装方法（SubTask 1.2）。
+
+        先执行 check_capital_limit，通过则调用 client.place_order，
+        否则返回拒绝响应 dict（不实际下单）。供策略调用替代直接 client.place_order。
+        """
+        qty = float(sz) if sz else 0.0
+        price = float(px) if px else 0.0
+        if not self.check_capital_limit(symbol, side, qty, price):
+            return {
+                "code": "-1",
+                "msg": "capital_limit_exceeded",
+                "data": [{"sCode": "-1", "sMsg": "资金上限超出，订单被拒绝"}],
+            }
+        return await self.client.place_order(
+            inst_id=symbol, side=side, ord_type=ord_type, sz=sz, px=px,
+        )
+
+    async def check_position_conflict(self, symbol: str, close_qty: float) -> bool:
+        """平仓前仓位冲突校验（Task 6: 改代数和）。
+
+        核心逻辑：多策略虚拟持仓代数叠加应等于真实持仓（"傅里叶叠加"原理），
+        多空对冲（A=+5, B=-5, real=0）不应误报冲突。
+        - others_occupied = 其他策略 net_position 的代数和（带符号，多正空负）
+        - real_pos = 真实持仓（带符号，多头正空头负）
+        - available = real_pos - others_occupied（代数运算，即本策略有效持仓）
+        - 可用量 usable：
+            * real_pos > 0（多头）：usable = max(0, available)
+            * real_pos < 0（空头）：usable = max(0, -available)
+            * real_pos == 0（纯对冲）：usable = abs(available)
+        - 当 close_qty > usable 时，记录 position_conflict 事件并返回 False。
+
+        - 节流：用 self._last_conflict_check_ts，默认 10s 内返回上次结果，避免频繁查 API
+        """
+        # 节流：间隔内返回上次结果
+        now = time.time()
+        interval = float(self.params.get("conflict_check_interval", 10))
+        if now - self._last_conflict_check_ts < interval:
+            return self._last_conflict_check_result
+
+        # 延迟导入避免循环依赖
+        from models.strategy import StrategyInstance
+        from models.pnl import PnlRecord
+
+        # 1. 查同账户同 symbol 其他活跃策略实例，聚合其虚拟持仓代数和（带符号，多正空负）
+        others_occupied = 0.0
+        try:
+            db = self.db_session_factory()
+            try:
+                chain = (
+                    db.query(StrategyInstance)
+                    .filter(StrategyInstance.account_id == self.account_id)
+                    .filter(StrategyInstance.symbol == symbol)
+                    .filter(StrategyInstance.status.in_(["running", "paused"]))
+                    .filter(StrategyInstance.id != self.instance_id)
+                )
+                others = chain.all()
+                for inst in others:
+                    latest = (
+                        db.query(PnlRecord)
+                        .filter(PnlRecord.strategy_instance_id == inst.id)
+                        .order_by(PnlRecord.recorded_at.desc())
+                        .first()
+                    )
+                    if latest is not None and latest.net_position is not None:
+                        others_occupied += float(latest.net_position)
+            finally:
+                db.close()
+        except Exception as e:
+            print(f"[BaseStrategy] check_position_conflict 查询异常: {e}")
+            self._last_conflict_check_ts = now
+            self._last_conflict_check_result = True  # 查询异常不阻塞交易
+            return True
+
+        # 2. 查真实持仓（带符号，多头正空头负）
+        real_pos = 0.0
+        try:
+            risk = await self.client.get_position_risk(symbol)
+            if risk is not None:
+                pos_str = risk.get("pos")
+                if pos_str is not None and pos_str != "":
+                    try:
+                        real_pos = float(pos_str)
+                    except (ValueError, TypeError):
+                        real_pos = 0.0
+        except Exception as e:
+            self._record_event(
+                "position_conflict",
+                f"仓位冲突校验查询真实持仓异常: {symbol} err={e}",
+                {"symbol": symbol, "error": str(e)},
+            )
+            self._last_conflict_check_ts = now
+            self._last_conflict_check_result = True
+            return True
+
+        # 3. 代数运算：available = real_pos - others_occupied（本策略有效持仓）
+        #    可用量 usable 按 real_pos 方向取值；available 与 real_pos 异号时，
+        #    真实方向不足以覆盖其他策略占用，usable=0 必然冲突。
+        available = real_pos - others_occupied
+        self._last_conflict_check_ts = now
+
+        if real_pos > 0:
+            # 多头：可用 = max(0, available)
+            usable = max(0.0, available)
+        elif real_pos < 0:
+            # 空头：可用 = max(0, -available)
+            usable = max(0.0, -available)
+        else:
+            # 纯对冲（real_pos == 0）：双向可用 = abs(available)
+            usable = abs(available)
+
+        if close_qty > usable:
+            self._record_event(
+                "position_conflict",
+                f"仓位冲突: {symbol} close_qty={close_qty} > usable={usable} "
+                f"(real_pos={real_pos}, others_occupied={others_occupied}, available={available})",
+                {
+                    "symbol": symbol,
+                    "close_qty": close_qty,
+                    "real_pos": real_pos,
+                    "others_occupied": others_occupied,
+                    "available": available,
+                },
+            )
+            self._last_conflict_check_result = False
+            return False
+
+        self._last_conflict_check_result = True
+        return True
+
+    async def close_position_with_conflict_check(
+        self, symbol: str, side: str, ord_type: str, sz, px=None, **kwargs
+    ) -> dict:
+        """带仓位冲突校验的平仓下单包装方法（SubTask 5.1）。
+
+        先调 check_position_conflict，通过则调 client.place_order，否则返回拒绝响应（不实际下单）。
+        供策略平仓时调用，替代直接 client.place_order。
+        """
+        qty = float(sz) if sz else 0.0
+        if not await self.check_position_conflict(symbol, qty):
+            return {
+                "code": "-1",
+                "msg": "position_conflict",
+                "data": [{"sCode": "-1", "sMsg": "仓位冲突，平仓被拒绝"}],
+            }
+        return await self.client.place_order(
+            inst_id=symbol, side=side, ord_type=ord_type, sz=sz, px=px,
+        )
+
+    async def check_margin_risk(self, symbol: str) -> bool:
+        """检查保证金占用率（SubTask 3.2）。
+
+        仅合约（-SWAP）才检查，现货直接返回 True。
+        调用 client.get_position_risk(symbol) 获取保证金占用率与强平价：
+        - 无持仓（返回 None）：返回 True（无风险）
+        - margin_ratio > 0.95：记录 margin_critical 事件并返回 False（调用方拒单）
+        - margin_ratio > 0.80：记录 margin_warning 事件并返回 True（仅告警，不拒单）
+        - 正常：返回 True
+
+        用 self._last_margin_check_ts 节流，默认 30s 查一次
+        （可配 self.params.get("margin_check_interval", 30)）；节流期内返回上次结果。
+        """
+        # 现货不检查保证金
+        if "-SWAP" not in symbol:
+            return True
+
+        # 节流：间隔内返回上次结果，避免每 tick 都查 API
+        now = time.time()
+        interval = float(self.params.get("margin_check_interval", 30))
+        if now - self._last_margin_check_ts < interval:
+            return self._last_margin_check_result
+
+        try:
+            risk = await self.client.get_position_risk(symbol)
+        except Exception as e:
+            # 查询异常不阻塞交易，返回上次结果（默认 True）
+            self._record_event(
+                "margin_check_failed",
+                f"保证金检查异常: {symbol} err={e}",
+                {"symbol": symbol, "error": str(e)},
+            )
+            return self._last_margin_check_result
+
+        self._last_margin_check_ts = now
+
+        # 无持仓：无风险
+        if risk is None:
+            self._last_margin_check_result = True
+            return True
+
+        try:
+            margin_ratio = float(risk.get("margin_ratio", 0.0))
+        except (ValueError, TypeError):
+            margin_ratio = 0.0
+        liq_px = risk.get("liq_px")
+
+        details = {
+            "symbol": symbol,
+            "margin_ratio": margin_ratio,
+            "liq_px": liq_px,
+            "margin": risk.get("margin"),
+            "pos": risk.get("pos"),
+            "pos_side": risk.get("pos_side"),
+        }
+
+        # 保证金临界：拒单
+        if margin_ratio > 0.95:
+            self._record_event(
+                "margin_critical",
+                f"保证金临界: {symbol} margin_ratio={margin_ratio:.4f} liq_px={liq_px}",
+                details,
+            )
+            self._last_margin_check_result = False
+            return False
+
+        # 保证金告警：不拒单，仅告警
+        if margin_ratio > 0.80:
+            self._record_event(
+                "margin_warning",
+                f"保证金告警: {symbol} margin_ratio={margin_ratio:.4f} liq_px={liq_px}",
+                details,
+            )
+            self._last_margin_check_result = True
+            return True
+
+        # 正常
+        self._last_margin_check_result = True
+        return True
+
     @abstractmethod
     async def execute(self):
         pass
@@ -111,6 +486,81 @@ class BaseStrategy(ABC):
     @abstractmethod
     async def validate_params(self) -> bool:
         pass
+
+    async def _apply_leverage_settings(self) -> bool:
+        """启动时设置合约杠杆（SubTask 2.2）。
+
+        仅当 symbol 是合约（含 "-SWAP"）且 lever > 0 时调用 client.set_leverage。
+        lever=1 且 td_mode=cross（OKX 默认）时跳过以减少 API 调用。
+        成功记录 leverage_set 事件，失败记录 leverage_set_failed 并返回 False（应阻止启动）。
+
+        Returns:
+            True 表示无需设置或设置成功；False 表示设置失败
+        """
+        symbol = self.params.get("symbol", "")
+        is_contract = "-SWAP" in symbol
+        if not is_contract or self.lever <= 0:
+            return True
+        # OKX 默认即 lever=1 + cross，跳过以减少 API 调用
+        if self.lever == 1 and self.td_mode == "cross":
+            return True
+        try:
+            await self.client.set_leverage(
+                inst_id=symbol, lever=self.lever, mgn_mode=self.td_mode,
+            )
+            self._record_event(
+                "leverage_set",
+                f"合约杠杆设置成功: {symbol} lever={self.lever} mgn_mode={self.td_mode}",
+                {"symbol": symbol, "lever": self.lever, "td_mode": self.td_mode},
+            )
+            return True
+        except OKXAPIException as e:
+            self._record_event(
+                "leverage_set_failed",
+                f"合约杠杆设置失败: {symbol} lever={self.lever} mgn_mode={self.td_mode} "
+                f"code={e.code} msg={e.msg}",
+                {
+                    "symbol": symbol, "lever": self.lever, "td_mode": self.td_mode,
+                    "error_code": e.code, "error_msg": e.msg, "endpoint": e.endpoint,
+                },
+            )
+            return False
+        except Exception as e:
+            self._record_event(
+                "leverage_set_failed",
+                f"合约杠杆设置异常: {symbol} lever={self.lever} mgn_mode={self.td_mode} err={e}",
+                {"symbol": symbol, "lever": self.lever, "td_mode": self.td_mode, "error": str(e)},
+            )
+            return False
+
+    def compute_order_qty(self, price: float, symbol: str) -> float:
+        """计算下单数量（SubTask 2.3）。
+
+        - 合约（-SWAP）：qty = investment_amount × lever / price，再按合约面值 ctVal 向下取整为整数张数
+        - 现货：qty = investment_amount / price（lever 不适用）
+        - investment_amount=0 或 price<=0 时返回 0
+        - 若 instrument 缓存未命中（无 ctVal），返回 float 由调用方处理
+
+        设计说明：网格策略当前用固定 order_qty 参数，本方法不强制改造 grid 的下单数量计算。
+        网格档位 qty 固定，杠杆放大的是可下档位数而非单档 qty，由 check_capital_limit 兜底。
+        """
+        if self.investment_amount <= 0 or price <= 0:
+            return 0.0
+        is_contract = "-SWAP" in symbol
+        if not is_contract:
+            # 现货：lever 不适用
+            return self.investment_amount / price
+        # 合约：名义价值 / 价格 = base 数量，再 / ctVal = 张数
+        raw_qty = self.investment_amount * self.lever / price
+        from services.instrument_cache import instrument_cache
+        cached = instrument_cache._cache.get(symbol)
+        if cached is None:
+            # 缓存未命中，返回 float 由调用方处理
+            return float(raw_qty)
+        ct_val = float(cached.get("ctVal", 1.0) or 1.0)
+        if ct_val <= 0:
+            ct_val = 1.0
+        return float(math.floor(raw_qty / ct_val))
 
     async def start(self):
         self._running = True
@@ -125,6 +575,10 @@ class BaseStrategy(ABC):
         # 注册 WebSocket 订单更新回调，实现实时订单状态同步
         if self._ws_client:
             self._ws_client.on_order_update(self._on_ws_order_update)
+        # 设置合约杠杆（SubTask 2.2）；失败则阻止启动
+        if not await self._apply_leverage_settings():
+            self.update_status("error")
+            return
         self._record_event("started", "策略已启动")
 
     def _on_ws_order_update(self, ord_id: str, state: str, order_data: dict):
@@ -137,12 +591,14 @@ class BaseStrategy(ABC):
             fill_px = order_data.get("fillPx", "")
             fill_sz = order_data.get("fillSz", "")
             fee = order_data.get("fee", "")
+            u_time = order_data.get("uTime", "")
             self.order_manager.update_order(
                 ord_id,
                 state=state,
                 fillPx=fill_px,
                 fillSz=fill_sz,
                 fee=fee,
+                uTime=u_time,
             )
         except Exception as e:
             self._record_event(
@@ -222,7 +678,8 @@ class BaseStrategy(ABC):
                         self.order_manager.update_order(order.ordId, state="filled",
                             fillPx=info[0].get("fillPx", ""),
                             fillSz=info[0].get("fillSz", ""),
-                            fee=info[0].get("fee", ""))
+                            fee=info[0].get("fee", ""),
+                            uTime=info[0].get("uTime", ""))
                         self._record_event("order_filled",
                             f"{order.side.upper()} 已成交(恢复): {symbol} ordId={order.ordId} px={order.px} qty={order.sz}",
                             {"order_id": order.ordId, "side": order.side, "price": order.px, "quantity": order.sz})
@@ -281,7 +738,13 @@ class BaseStrategy(ABC):
             update_kwargs = {"state": status}
             if status == "filled":
                 update_kwargs["fillSz"] = str(quantity)
-                update_kwargs["fillPx"] = str(price)
+                # 不覆盖 OKX 推送的真实成交价 fillPx：
+                # price 参数是网格档位价（限价），而非实际成交价。
+                # OKX WS 推送的 fillPx 已在 _on_ws_order_update 中写入，
+                # 此处仅在 fillPx 缺失时用限价回退。
+                existing = self.order_manager.get_order(order_id)
+                if existing is None or not existing.fillPx:
+                    update_kwargs["fillPx"] = str(price)
             self.order_manager.update_order(order_id, **update_kwargs)
 
         event_type_map = {

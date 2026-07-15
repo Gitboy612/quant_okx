@@ -6,6 +6,8 @@
 所有指标共享 `compute_indicator(ref, ctx)` 解析函数，带同 tick 缓存，
 供条件库与执行器复用。
 """
+import asyncio
+
 from dsl.registry import indicator, indicator_registry
 from dsl.schema import IndicatorRef
 from dsl.context import ExecutionContext
@@ -55,10 +57,17 @@ def _ema_series(values: list[float], period: int) -> list[float]:
 
 
 async def _fetch_closes(ctx: ExecutionContext, symbol: str, bar: str, limit: int) -> list[float]:
-    """拉取 K 线并返回 close 序列（旧→新），失败或数据不足返回空列表。"""
+    """拉取 K 线并返回 close 序列（旧→新），失败或数据不足返回空列表。
+
+    用 5s 超时包裹 get_candles，避免 OKX 客户端内部重试阻塞条件求值。
+    超时返回空列表，使依赖该数据的指标（EMA/RSI 等）返回 0.0，
+    让 or(gt/lt) 等 fallback 条件仍可触发。
+    """
     try:
-        candles = await ctx.client.get_candles(symbol, bar=bar, limit=str(limit))
-    except Exception:
+        candles = await asyncio.wait_for(
+            ctx.client.get_candles(symbol, bar=bar, limit=str(limit)), timeout=5.0
+        )
+    except (asyncio.TimeoutError, Exception):
         return []
     if not candles:
         return []
@@ -94,12 +103,16 @@ class PriceLast:
         symbol = self.symbol or ctx.symbol
         if not symbol:
             return 0.0
-        # 若 symbol == ctx.symbol 且 current_price > 0，直接用缓存价避免重复请求
-        if symbol == ctx.symbol and ctx.current_price > 0:
+        # 若 symbol == ctx.symbol，直接用 ctx.current_price（无论 0 或 >0）：
+        # 主循环每 tick 已通过 _refresh_price 尝试刷新（含 5s 超时兜底），
+        # 这里复用缓存价避免重复网络调用阻塞条件求值。
+        if symbol == ctx.symbol:
             return float(ctx.current_price)
         try:
-            data = await ctx.client.get_ticker(symbol)
-        except Exception:
+            data = await asyncio.wait_for(
+                ctx.client.get_ticker(symbol), timeout=5.0
+            )
+        except (asyncio.TimeoutError, Exception):
             return 0.0
         if not data:
             return 0.0

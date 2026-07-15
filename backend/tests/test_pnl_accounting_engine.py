@@ -89,7 +89,7 @@ def _make_incremental_mock_db(new_orders, instance=None, latest_pnl=None):
 
     incremental_update 涉及的 query 链路：
       - StrategyInstance: .filter().first()
-      - Order: .filter().filter().filter().order_by().all()  /  .filter().update()
+      - Order: .filter().filter().filter().all()  /  .filter().update()
       - PnlRecord: .filter().order_by().first()
     """
     mock_db = MagicMock()
@@ -99,8 +99,8 @@ def _make_incremental_mock_db(new_orders, instance=None, latest_pnl=None):
         if model is StrategyInstance:
             chain.filter.return_value.first.return_value = instance
         elif model is Order:
-            # .filter().filter().filter().order_by().all() — 查询未核算订单
-            chain.filter.return_value.filter.return_value.filter.return_value.order_by.return_value.all.return_value = new_orders
+            # .filter().filter().filter().all() — 查询未核算订单（Python 端排序）
+            chain.filter.return_value.filter.return_value.filter.return_value.all.return_value = new_orders
             # .filter().update() — 批量标记 pnl_accounted=True
             chain.filter.return_value.update.return_value = 0
         elif model is PnlRecord:
@@ -134,18 +134,20 @@ class TestRecompute:
         # buy_total = 5 × 1.0 × 100 = 500
         # sell_total = 5 × 1.0 × 110 = 550
         # total_fee = 10 × 0.1 = 1.0
-        # total_pnl = 550 - 500 - 1 = 49
+        # FIFO 配对：每笔 sell 匹配最老的 buy
+        # 每对 realized = (110-100) × 1.0 - (0.1+0.1) = 9.8
+        # realized_pnl = 9.8 × 5 = 49.0
+        # net_position = 5 - 5 = 0 → unrealized_pnl = 0（无持仓）
+        # total_pnl = realized_pnl + unrealized_pnl = 49.0 + 0 = 49.0
         assert snapshot.total_pnl == pytest.approx(49.0, rel=1e-9)
-        # matched_qty = 5, avg_buy_px = 100, avg_sell_px = 110
-        # avg_fee_per_unit = 1.0 / 10 = 0.1
-        # realized_pnl = 5 × (110-100) - 5 × 0.1 = 50 - 0.5 = 49.5
-        assert snapshot.realized_pnl == pytest.approx(49.5, rel=1e-9)
-        # unrealized_pnl = total_pnl - realized_pnl = 49 - 49.5 = -0.5
-        assert snapshot.unrealized_pnl == pytest.approx(-0.5, rel=1e-9)
+        # FIFO realized_pnl = 5 × (110-100) - 5 × (0.1+0.1) = 50 - 1.0 = 49.0
+        assert snapshot.realized_pnl == pytest.approx(49.0, rel=1e-9)
+        # unrealized_pnl = 0（net_position=0，无未平仓持仓）
+        assert snapshot.unrealized_pnl == pytest.approx(0.0, rel=1e-9)
         # net_position = 5 - 5 = 0
         assert snapshot.net_position == pytest.approx(0.0, abs=1e-12)
-        # avg_buy_price = 500 / 5 = 100
-        assert snapshot.avg_buy_price == pytest.approx(100.0, rel=1e-9)
+        # avg_buy_price = 0（FIFO 配对后所有买单已消耗，无剩余买入）
+        assert snapshot.avg_buy_price == pytest.approx(0.0, rel=1e-9)
         # total_fee = 1.0
         assert snapshot.total_fee == pytest.approx(1.0, rel=1e-9)
         # order_count = 10
@@ -177,10 +179,12 @@ class TestIncrementalUpdate:
 
     @pytest.mark.asyncio
     async def test_incremental_after_recompute(self):
-        """首次 recompute 后新增 3 笔 filled，验证 incremental_update 累计值正确
+        """有基准买单且新增卖单时，incremental_update 委托 recompute 确保 FIFO 精度
 
-        基准: realized=10, net_position=2, avg_buy=100, total_fee=0.5, order_count=5
-        新增: 2 buy (qty=1, px=105) + 1 sell (qty=1, px=115)
+        基准: realized=10, net_position=2, avg_buy=100 → 基准买单队列非空
+        新增: 2 buy (qty=1, px=105) + 1 sell (qty=1, px=115) → 有卖单
+        增量路径用 avg_buy_price 近似 FIFO 配对会导致 realized_pnl 漂移，
+        故委托全量 recompute 确保 FIFO 精度。
         """
         # 基准 PnlRecord
         latest = MagicMock()
@@ -201,23 +205,72 @@ class TestIncrementalUpdate:
         instance = _make_instance(account_id=1, symbol="BTC-USDT", params={"fee_rate": 0.001})
         mock_db = _make_incremental_mock_db(new_orders, instance=instance, latest_pnl=latest)
 
+        expected_snapshot = PnlSnapshot(
+            strategy_instance_id=1,
+            realized_pnl=24.8,
+            unrealized_pnl=0.0,
+            total_pnl=24.8,
+            equity=5000.0,
+            net_position=3.0,
+            avg_buy_price=310.0 / 3.0,
+            total_fee=0.8,
+            order_count=8,
+            recorded_at=datetime.now(timezone.utc),
+        )
+
+        engine = PnlAccountingEngine()
+        with patch("services.pnl_accounting_engine.SessionLocal", return_value=mock_db):
+            with patch.object(PnlAccountingEngine, "recompute", new_callable=AsyncMock, return_value=expected_snapshot) as mock_recompute:
+                snapshot = await engine.incremental_update(strategy_instance_id=1, client=None)
+
+        # 验证委托 recompute（有卖单 + 基准买单 → 委托全量核算）
+        mock_recompute.assert_called_once_with(1, None)
+        assert snapshot is expected_snapshot
+
+    @pytest.mark.asyncio
+    async def test_incremental_sells_match_new_buys_only(self):
+        """无基准买单时，卖单仅匹配新增买单 → 走增量路径，不委托 recompute
+
+        基准: realized=10, net_position=0, avg_buy=0 → 基准买单队列为空
+        新增: 2 buy (qty=1, px=105) + 1 sell (qty=1, px=115)
+        卖单匹配新增 buy@105（非基准买单），增量路径 FIFO 精确。
+        """
+        latest = MagicMock()
+        latest.realized_pnl = 10.0
+        latest.net_position = 0.0
+        latest.avg_buy_price = 0.0
+        latest.total_fee = 0.5
+        latest.order_count = 5
+        latest.equity = 5000.0
+
+        new_orders = [
+            _make_order(101, "buy", 105.0, 1.0, 0.1, actual_qty=1.0),
+            _make_order(102, "buy", 105.0, 1.0, 0.1, actual_qty=1.0),
+            _make_order(103, "sell", 115.0, 1.0, 0.1, actual_qty=1.0),
+        ]
+
+        instance = _make_instance(account_id=1, symbol="BTC-USDT", params={"fee_rate": 0.001})
+        mock_db = _make_incremental_mock_db(new_orders, instance=instance, latest_pnl=latest)
+
         engine = PnlAccountingEngine()
         with patch("services.pnl_accounting_engine.SessionLocal", return_value=mock_db):
             snapshot = await engine.incremental_update(strategy_instance_id=1, client=None)
 
-        # net_position = 2 + 2(买) - 1(卖) = 3
-        assert snapshot.net_position == pytest.approx(3.0, rel=1e-9)
-        # avg_buy_price = (2×100 + 2×1×105) / 4 = 410/4 = 102.5
-        assert snapshot.avg_buy_price == pytest.approx(102.5, rel=1e-9)
-        # realized_pnl: 卖出 1 张时 net_position 从 4→3（未归零），不触发闭环，realized 保持 10
-        assert snapshot.realized_pnl == pytest.approx(10.0, rel=1e-9)
+        # net_position = 0 + 2(买) - 1(卖) = 1
+        assert snapshot.net_position == pytest.approx(1.0, rel=1e-9)
+        # avg_buy_price: 卖出 1 张后剩余 1 张 buy@105
+        assert snapshot.avg_buy_price == pytest.approx(105.0, rel=1e-9)
+        # realized_pnl: FIFO 配对，sell@115 匹配新增 buy@105
+        # buy_fee_per_unit=0.1, sell_fee_per_unit=0.1
+        # realized = 10(base) + (115-105)×1 - (0.1+0.1)×1 = 10 + 9.8 = 19.8
+        assert snapshot.realized_pnl == pytest.approx(19.8, rel=1e-9)
         # total_fee = 0.5 + 3×0.1 = 0.8
         assert snapshot.total_fee == pytest.approx(0.8, rel=1e-9)
         # order_count = 5 + 3 = 8
         assert snapshot.order_count == 8
-        # client=None → unrealized_pnl=0, total_pnl=realized+unrealized=10
+        # client=None → unrealized_pnl=0, total_pnl=realized+unrealized=19.8
         assert snapshot.unrealized_pnl == pytest.approx(0.0, abs=1e-12)
-        assert snapshot.total_pnl == pytest.approx(10.0, rel=1e-9)
+        assert snapshot.total_pnl == pytest.approx(19.8, rel=1e-9)
         # equity 保留上次值
         assert snapshot.equity == pytest.approx(5000.0, rel=1e-9)
         # 验证写入 PnlRecord 并提交
@@ -502,18 +555,20 @@ class TestComposableStrategyPnl:
         # buy_total = 2 × 1.0 × 100 = 200
         # sell_total = 2 × 1.0 × 120 = 240
         # total_fee = 4 × 0.1 = 0.4
-        # total_pnl = 240 - 200 - 0.4 = 39.6
+        # FIFO 配对：每笔 sell 匹配最老的 buy
+        # 每对 realized = (120-100) × 1 - (0.1+0.1) × 1 = 20 - 0.2 = 19.8
+        # realized_pnl = 19.8 × 2 = 39.6
+        # net_position = 2 - 2 = 0 → unrealized_pnl = 0（无持仓）
+        # total_pnl = realized_pnl + unrealized_pnl = 39.6 + 0 = 39.6
         assert snapshot.total_pnl == pytest.approx(39.6, rel=1e-9)
-        # matched_qty = 2, avg_buy_px = 100, avg_sell_px = 120
-        # avg_fee_per_unit = 0.4 / 4 = 0.1
-        # realized_pnl = 2 × (120-100) - 2 × 0.1 = 40 - 0.2 = 39.8
-        assert snapshot.realized_pnl == pytest.approx(39.8, rel=1e-9)
-        # unrealized_pnl = total_pnl - realized_pnl = 39.6 - 39.8 = -0.2
-        assert snapshot.unrealized_pnl == pytest.approx(-0.2, rel=1e-9)
+        # FIFO realized_pnl = 2 × (120-100) - 2 × (0.1+0.1) = 40 - 0.4 = 39.6
+        assert snapshot.realized_pnl == pytest.approx(39.6, rel=1e-9)
+        # unrealized_pnl = 0（net_position=0，无未平仓持仓）
+        assert snapshot.unrealized_pnl == pytest.approx(0.0, rel=1e-9)
         # net_position = 2 - 2 = 0
         assert snapshot.net_position == pytest.approx(0.0, abs=1e-12)
-        # avg_buy_price = 200 / 2 = 100
-        assert snapshot.avg_buy_price == pytest.approx(100.0, rel=1e-9)
+        # avg_buy_price = 0（FIFO 配对后所有买单已消耗，无剩余买入）
+        assert snapshot.avg_buy_price == pytest.approx(0.0, rel=1e-9)
         # total_fee = 0.4
         assert snapshot.total_fee == pytest.approx(0.4, rel=1e-9)
         # order_count = 4

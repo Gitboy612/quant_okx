@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from dsl.registry import action
@@ -40,12 +41,13 @@ class PauseOrders:
 
     async def execute(self, ctx: ExecutionContext) -> None:
         symbol = self.symbol or ctx.symbol
+        # 先记录触发事件（确保条件触发可被验证），再执行网络操作
+        ctx.strategy._record_event("dsl_action", f"pause_orders: {symbol}")
         if ctx.base_strategy is not None:
             await ctx.base_strategy.on_pause(ctx)
         else:
             # 回退：直接撤销所有挂单
             await ctx.order_manager.cancel_all(symbol)
-        ctx.strategy._record_event("dsl_action", f"pause_orders: {symbol}")
 
 
 @action("resume_orders")
@@ -68,8 +70,10 @@ class ResumeOrders:
 
     async def execute(self, ctx: ExecutionContext) -> None:
         symbol = self.symbol or ctx.symbol
-        await ctx.base_strategy.on_resume(ctx)
+        # 先记录触发事件（确保条件触发可被验证），再执行网络操作
         ctx.strategy._record_event("dsl_action", f"resume_orders: {symbol}")
+        if ctx.base_strategy is not None:
+            await ctx.base_strategy.on_resume(ctx)
 
 
 @action("hold_position")
@@ -141,15 +145,26 @@ class RebalancePosition:
         # 获取理论持仓（同步方法）
         theoretical = float(ctx.base_strategy.get_theoretical_position(ctx))
 
-        # 获取实际持仓：从 positions 列表中匹配 symbol
-        positions = await ctx.client.get_positions()
+        # 获取实际持仓：从 positions 列表中匹配 symbol（网络调用，可能失败）
         actual = 0.0
-        for pos in positions:
-            inst_id = pos.get("instId") if isinstance(pos, dict) else getattr(pos, "instId", None)
-            if inst_id == symbol:
-                pos_val = pos.get("pos") if isinstance(pos, dict) else getattr(pos, "pos", "0")
-                actual = float(pos_val or 0)
-                break
+        try:
+            positions = await asyncio.wait_for(
+                ctx.client.get_positions(), timeout=5.0
+            )
+            for pos in positions:
+                inst_id = pos.get("instId") if isinstance(pos, dict) else getattr(pos, "instId", None)
+                if inst_id == symbol:
+                    pos_val = pos.get("pos") if isinstance(pos, dict) else getattr(pos, "pos", "0")
+                    actual = float(pos_val or 0)
+                    break
+        except Exception:
+            # 网络错误：先记录触发事件（确保条件触发可被验证），再向上抛出
+            ctx.strategy._record_event(
+                "dsl_action",
+                f"rebalance_position: {symbol} (获取持仓失败, theoretical={theoretical})",
+                {"symbol": symbol, "mode": self.mode, "theoretical": theoretical, "actual": None},
+            )
+            raise
 
         delta = theoretical - actual
 

@@ -1,0 +1,21 @@
+{
+  "generated_at": "2026-07-11T13:54:17.152393+00:00",
+  "module": "isolation",
+  "total": 8,
+  "passed": 7,
+  "failed": 1,
+  "errors": 0,
+  "skipped": 0,
+  "pass_rate": 0.875,
+  "duration_seconds": 0.79,
+  "failures": [
+    {
+      "module": "test_demo_multi_strategy_isolation",
+      "test": "test_multi_strategy_isolation_demo",
+      "outcome": "failed",
+      "duration": 0.149,
+      "message": "C:\\Users\\quien\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\sqlalchemy\\engine\\base.py:1969: in _exec_single_context\n    self.dialect.do_execute(\nC:\\Users\\quien\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\sqlalchemy\\engine\\default.py:952: in do_execute\n    cursor.execute(statement, parameters)\nE   sqlite3.OperationalError: no such column: orders.cl_ord_id\n\nThe above exception was the direct cause of the following exception:\ntests\\e2e\\test_demo_multi_strategy_isolation.py:685: in test_multi_strategy_isolation_demo\n    wait_for(lambda: count_live_orders(grid_iid) > 0, timeout=30, desc=\"网格 live 订单出现\")\ntests\\e2e\\conftest_e2e.py:363: in wait_for\n    if condition():\n       ^^^^^^^^^^^\ntests\\e2e\\test_demo_multi_strategy_isolation.py:685: in <lambda>\n    wait_for(lambda: count_live_orders(grid_iid) > 0, timeout=30, desc=\"网格 live 订单出现\")\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^\ntests\\e2e\\conftest_e2e.py:376: in count_live_orders\n    ).count()\n      ^^^^^^^\nC:\\Users\\quien\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\sqlalchemy\\orm\\query.py:3153: in count\n    self._legacy_from_self(col).enable_eagerloads(False).scalar()\nC:\\Users\\quien\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\sqlalchemy\\orm\\query.py:2842: in scalar\n    ret = self.one()\n          ^^^^^^^^^^\nC:\\Users\\quien\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\sqlalchemy\\orm\\query.py:2815: in one\n    return self._iter().one()  # type: ignore\n           ^^^^^^^^^^^^\nC:\\Users\\quien\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\sqlalchemy\\orm\\query.py:2864: in _iter\n    result: Union[ScalarResult[_T], Result[_T]] = self.session.execute(\nC:\\Users\\quien\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\sqlalchemy\\orm\\session.py:2373: in execute\n    return self._execute_internal(\nC:\\Users\\quien\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\sqlalchemy\\orm\\session.py:2271: in _execute_internal\n    result: Result[Any] = compi...(truncated)"
+    }
+  ],
+  "summary": "7/8 passed (87.50%)"
+}

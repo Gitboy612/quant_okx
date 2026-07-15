@@ -1,0 +1,53 @@
+{
+  "audit_type": "hourly_third_party_audit",
+  "started_at": "2026-07-12T05:05:22.845130+00:00",
+  "version": "1.0",
+  "checks": {
+    "order_uniqueness": {
+      "check": "order_uniqueness",
+      "passed": true,
+      "duplicate_claims": [],
+      "orphan_orders": [],
+      "total_orders_checked": 8
+    },
+    "pnl_correctness": {
+      "check": "pnl_correctness",
+      "passed": false,
+      "per_strategy": [
+        {
+          "strategy_instance_id": 5,
+          "symbol": "BTC-USDT",
+          "error": "OKXClient.__init__() missing 2 required positional arguments: 'secret_encrypted' and 'passphrase_encrypted'",
+          "matched": false
+        }
+      ],
+      "total_checked": 1,
+      "tolerance": 0.5
+    },
+    "position_isolation": {
+      "check": "position_isolation",
+      "passed": true,
+      "per_symbol": [
+        {
+          "account_id": 1,
+          "symbol": "BTC-USDT",
+          "virtual_total": 0.0,
+          "real_total": 0.0,
+          "diff": 0.0,
+          "matched": true
+        }
+      ],
+      "total_checked": 1,
+      "tolerance": 0.0001
+    },
+    "capital_constraints": {
+      "check": "capital_constraints",
+      "passed": true,
+      "violations": [],
+      "total_checked": 1
+    }
+  },
+  "finished_at": "2026-07-12T05:05:25.822889+00:00",
+  "duration_seconds": 2.978,
+  "overall_passed": false
+}

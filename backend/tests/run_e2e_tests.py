@@ -10,6 +10,7 @@
     python run_e2e_tests.py --module pnl
     python run_e2e_tests.py --module websocket
     python run_e2e_tests.py --module recovery
+    python run_e2e_tests.py --module isolation
 
     # 执行并生成 JSON 测试报告（输出到 backend/tests/reports/）
     python run_e2e_tests.py --report
@@ -48,6 +49,7 @@ MODULE_MAP = {
     "pnl": "test_demo_pnl_consistency.py",
     "websocket": "test_demo_websocket.py",
     "recovery": "test_demo_recovery.py",
+    "isolation": "test_demo_multi_strategy_isolation.py",
 }
 
 E2E_DIR = os.path.join(_TESTS_DIR, "e2e")
@@ -221,6 +223,7 @@ def _build_pytest_args(targets):
         "-v",
         "--tb=short",
         "-p", "no:cacheprovider",  # 禁用缓存，避免跨运行状态污染
+        "-m", "not demo",  # 默认跳过需真实 API 的 @pytest.mark.demo 测试
     ]
     args.extend(targets)
     return args
@@ -230,7 +233,7 @@ def run_e2e(module_filter=None, generate_report=False):
     """执行 E2E 测试。
 
     Args:
-        module_filter: 模块名（grid/trend/pnl/websocket/recovery）或 None/all
+        module_filter: 模块名（grid/trend/pnl/websocket/recovery/isolation）或 None/all
         generate_report: 是否生成 JSON 报告文件
 
     Returns:

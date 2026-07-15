@@ -1,0 +1,129 @@
+{
+  "execution_count": 28,
+  "running_count": 1,
+  "max_strategies": 5,
+  "baseline": {
+    "start_price": 1660.11,
+    "end_price": 1824.12,
+    "days": 30,
+    "actual_candles": 30,
+    "return": 0.09879465818530098,
+    "annualized_return": 1.2020016745878286
+  },
+  "strategies": [
+    {
+      "instance_id": 2,
+      "name": "classic_grid_28_inst",
+      "symbol": "BTC-USDT-SWAP",
+      "status": "running",
+      "account_id": 1,
+      "template_id": 6,
+      "template_type": "composable",
+      "started_at": "2026-07-12T10:56:07.645224+00:00",
+      "run_days": 0.0005,
+      "latest_pnl": {
+        "realized": 0.0,
+        "unrealized": 0.0,
+        "total": 0.0,
+        "equity": 0.0,
+        "net_position": 0.0,
+        "avg_buy_price": 0.0,
+        "recorded_at": null
+      },
+      "metrics": {
+        "sharpe": 0.0,
+        "max_drawdown": 0.0,
+        "win_rate": 0.0,
+        "profit_loss_ratio": 0.0,
+        "wins": 0,
+        "losses": 0,
+        "total_trades": 0
+      },
+      "risk_events": {},
+      "total_risk_events": 0,
+      "consecutive_errors": 0,
+      "pnl_records_count": 0,
+      "pnl_continuous": false,
+      "orders_count": 0,
+      "reconcile": {
+        "account_id": 1,
+        "symbol": "BTC-USDT-SWAP",
+        "virtual_total": 0.0,
+        "real_total": 0.0,
+        "diff": 0.0,
+        "tolerance": 0.0001,
+        "matched": true
+      },
+      "anomaly": null,
+      "stop_reasons": [],
+      "params": {
+        "qs_model_config": {
+          "qs_model_version": "2.0",
+          "meta": {
+            "name": "classic_grid_28",
+            "version": "1.0",
+            "base_symbol": "BTC-USDT-SWAP",
+            "asset_class": "CRYPTO"
+          },
+          "params": {
+            "grid_count": {
+              "label": "网格数量",
+              "value": 30,
+              "type": "int",
+              "range": [
+                5,
+                100
+              ],
+              "unit": "格",
+              "description": "网格档位数量"
+            },
+            "order_qty": {
+              "label": "单格数量",
+              "value": 0.3,
+              "type": "float",
+              "range": [
+                0.001,
+                10.0
+              ],
+              "unit": "币",
+              "description": "单格交易量"
+            },
+            "lever": {
+              "label": "杠杆倍数",
+              "value": 3,
+              "type": "int",
+              "range": [
+                1,
+                20
+              ],
+              "unit": "x",
+              "description": "杠杆倍数（策略级参数，控制风险敞口）"
+            }
+          },
+          "logic": {
+            "version": "1.0",
+            "base_strategy": {
+              "kind": "grid",
+              "params": {
+                "upper_price": 70252.16,
+                "lower_price": 57479.04,
+                "grid_count": "$params.grid_count",
+                "order_qty": "$params.order_qty",
+                "symbol": "$meta.base_symbol"
+              }
+            },
+            "rules": []
+          },
+          "risk_filter": {
+            "daily_max_loss": 10.0,
+            "stop_loss": 0.05,
+            "take_profit": 0.1
+          }
+        },
+        "symbol": "BTC-USDT-SWAP",
+        "investment_amount": 100.0
+      }
+    }
+  ],
+  "updated_at": "2026-07-12T10:56:55.665579+00:00"
+}

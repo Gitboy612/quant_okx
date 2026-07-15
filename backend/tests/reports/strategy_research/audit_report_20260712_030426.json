@@ -1,0 +1,63 @@
+{
+  "audit_type": "hourly_third_party_audit",
+  "started_at": "2026-07-12T03:04:26.776453+00:00",
+  "version": "1.0",
+  "checks": {
+    "order_uniqueness": {
+      "check": "order_uniqueness",
+      "passed": true,
+      "duplicate_claims": [],
+      "orphan_orders": [],
+      "total_orders_checked": 3
+    },
+    "pnl_correctness": {
+      "check": "pnl_correctness",
+      "passed": false,
+      "per_strategy": [
+        {
+          "strategy_instance_id": 4,
+          "symbol": "BTC-USDT",
+          "error": "OKXClient.__init__() missing 2 required positional arguments: 'secret_encrypted' and 'passphrase_encrypted'",
+          "matched": false
+        }
+      ],
+      "total_checked": 1,
+      "tolerance": 0.5
+    },
+    "position_isolation": {
+      "check": "position_isolation",
+      "passed": false,
+      "per_symbol": [
+        {
+          "account_id": 1,
+          "symbol": "BTC-USDT",
+          "virtual_total": 0.05,
+          "real_total": 0.0,
+          "diff": 0.05,
+          "matched": false
+        }
+      ],
+      "total_checked": 1,
+      "tolerance": 0.0001
+    },
+    "capital_constraints": {
+      "check": "capital_constraints",
+      "passed": false,
+      "violations": [
+        {
+          "strategy_instance_id": 4,
+          "symbol": "BTC-USDT",
+          "current_value": 3204.455,
+          "cap": 100.0,
+          "excess": 3104.455,
+          "investment_amount": 100.0,
+          "lever": 1.0
+        }
+      ],
+      "total_checked": 1
+    }
+  },
+  "finished_at": "2026-07-12T03:04:32.969497+00:00",
+  "duration_seconds": 6.193,
+  "overall_passed": false
+}

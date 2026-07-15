@@ -172,5 +172,89 @@ if __name__ == "__main__":
         runner = TestRunner()
         await test_trade_interfaces(runner)
         runner.print_summary("交易接口测试")
-    
+
     asyncio.run(main())
+
+
+# ============================================================================
+# 单元测试（Mock httpx，不依赖真实 OKX 账户）
+# 下方测试通过 Mock OKXBaseClient._request 验证 set_leverage 的请求参数与错误处理
+# ============================================================================
+
+import pytest
+from unittest.mock import AsyncMock, MagicMock
+
+from services.okx.trade import TradeAPI
+from services.okx.exceptions import OKXAPIException
+
+
+# 上方 test_trade_interfaces(runner) 为集成测试，需通过 run_tests.py 或 __main__ 运行。
+# 此 fixture 让其在 pytest 下被跳过（而非因缺少 fixture 报错）；直接调用不受影响。
+@pytest.fixture
+def runner():
+    pytest.skip("集成测试需通过 run_tests.py 或 python tests/test_trade.py 运行")
+
+
+def _make_trade_api_with_mock():
+    """构造一个绑定 Mock 基类客户端的 TradeAPI。"""
+    mock_client = MagicMock()
+    mock_client._request = AsyncMock()
+    return TradeAPI(mock_client), mock_client
+
+
+async def test_set_leverage_request_params_cross():
+    """全仓模式：lever(int) 转 str，posSide 不传。"""
+    api, mock_client = _make_trade_api_with_mock()
+    mock_client._request.return_value = {
+        "code": "0", "msg": "",
+        "data": [{"instId": "ETH-USDT-SWAP", "lever": "10", "mgnMode": "cross"}],
+    }
+    resp = await api.set_leverage("ETH-USDT-SWAP", 10, "cross")
+    assert resp["code"] == "0"
+    mock_client._request.assert_awaited_once()
+    call = mock_client._request.call_args
+    assert call.args[0] == "POST"
+    assert call.args[1] == "/api/v5/account/set-leverage"
+    body = call.kwargs["body"]
+    assert body["instId"] == "ETH-USDT-SWAP"
+    assert body["lever"] == "10"  # int -> str
+    assert body["mgnMode"] == "cross"
+    assert "posSide" not in body  # 单向持仓不传 posSide
+    assert call.kwargs["is_private"] is True
+
+
+async def test_set_leverage_request_params_dual_side():
+    """双向持仓：pos_side 传入且 mgn_mode 可为 isolated。"""
+    api, mock_client = _make_trade_api_with_mock()
+    mock_client._request.return_value = {"code": "0", "msg": "", "data": []}
+    await api.set_leverage("ETH-USDT-SWAP", 5, mgn_mode="isolated", pos_side="long")
+    body = mock_client._request.call_args.kwargs["body"]
+    assert body["mgnMode"] == "isolated"
+    assert body["posSide"] == "long"
+    assert body["lever"] == "5"
+
+
+async def test_set_leverage_default_mgn_mode():
+    """默认 mgn_mode=cross。"""
+    api, mock_client = _make_trade_api_with_mock()
+    mock_client._request.return_value = {"code": "0", "msg": "", "data": []}
+    await api.set_leverage("ETH-USDT-SWAP", 3)
+    body = mock_client._request.call_args.kwargs["body"]
+    assert body["mgnMode"] == "cross"
+
+
+async def test_set_leverage_error_raises():
+    """code!=0 时抛 OKXAPIException，msg 含错误码映射后的可读描述。"""
+    api, mock_client = _make_trade_api_with_mock()
+    mock_client._request.return_value = {
+        "code": "51108",
+        "msg": "Leverage out of valid range",
+        "_error_desc": "杠杆不在有效范围内",
+        "data": [],
+    }
+    with pytest.raises(OKXAPIException) as exc_info:
+        await api.set_leverage("ETH-USDT-SWAP", 999)
+    assert exc_info.value.code == "51108"
+    assert "杠杆不在有效范围内" in exc_info.value.msg
+    assert exc_info.value.endpoint == "/api/v5/account/set-leverage"
+

@@ -6,7 +6,6 @@ import { getAccountBalance, getPositions } from '../api/accounts'
 import { useSelectedAccount } from '../hooks/useSelectedAccount'
 import { getSettings } from '../api/settings'
 import type { PnlSummary, PnlRecord, StrategyInstance, Order, AssetBalance, Position, ApiCallLogItem } from '../types'
-import type { TimeRange } from '../components/PnLChart'
 
 export function useDashboardState() {
   const [summary, setSummary] = useState<PnlSummary | null>(null)
@@ -24,44 +23,26 @@ export function useDashboardState() {
   const [positionsLoading, setPositionsLoading] = useState(false)
   const [lastRefresh, setLastRefresh] = useState<string | null>(null)
   const [refreshInterval, setRefreshInterval] = useState<number>(0)
-  const [timeRange, setTimeRange] = useState<TimeRange>('all')
   const [summaryLoading, setSummaryLoading] = useState(true)
   const [ordersLoading, setOrdersLoading] = useState(true)
   const [logsLoading, setLogsLoading] = useState(true)
   const [kpiLoading, setKpiLoading] = useState(true)
+  // PnL 曲线区域加载态：切换策略时重置为 true
+  const [pnlLoading, setPnlLoading] = useState(true)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const selectedAccount = accounts.find((a) => a.id === selectedAccountId)
 
-  const computeStartTime = (range: TimeRange): string | undefined => {
-    const now = new Date()
-    if (range === '24h') {
-      const start = new Date(now.getTime() - 24 * 60 * 60 * 1000)
-      return start.toISOString()
-    }
-    if (range === '7d') {
-      const start = new Date(now)
-      start.setHours(0, 0, 0, 0)
-      start.setDate(start.getDate() - 7)
-      return start.toISOString()
-    }
-    if (range === '30d') {
-      const start = new Date(now)
-      start.setHours(0, 0, 0, 0)
-      start.setDate(start.getDate() - 30)
-      return start.toISOString()
-    }
-    // all: 不传 start_time
-    return undefined
-  }
-
   const loadBaseData = useCallback(() => {
     const sid = selectedStrategyId || undefined
-    getPnlSummary().then((res) => { setSummary(res.data); setSummaryLoading(false); setKpiLoading(false) }).catch(() => { setSummaryLoading(false); setKpiLoading(false) })
-    const startTime = computeStartTime(timeRange)
+    // PnL 曲线开始加载
+    setPnlLoading(true)
+    // 传入 strategy_instance_id 以支持按策略筛选汇总
+    getPnlSummary(sid ? { strategy_instance_id: sid } : {}).then((res) => { setSummary(res.data); setSummaryLoading(false); setKpiLoading(false) }).catch(() => { setSummaryLoading(false); setKpiLoading(false) })
+    // 直接拉取原始数据点（后端上限 5000），不再按时间范围筛选
     listPnlRecords({
       ...(sid ? { strategy_instance_id: sid } : {}),
-      ...(startTime ? { start_time: startTime } : {}),
-    }).then((res) => setPnlRecords(res.data)).catch(() => {})
+      limit: 5000,
+    }).then((res) => setPnlRecords(res.data)).catch(() => {}).finally(() => setPnlLoading(false))
     listInstances().then((res) => setInstances(res.data)).catch(() => {})
     listOrders(sid ? { strategy_instance_id: sid, status: 'filled', limit: 10, sort_by: 'updated_at' } : { status: 'filled', limit: 10, sort_by: 'updated_at' }).then((res) => {
       setOrders(res.data)
@@ -71,7 +52,7 @@ export function useDashboardState() {
       setLiveOrders(res.data)
     }).catch(() => {})
     listApiCallLogs(sid ? { strategy_instance_id: sid, limit: 50 } : { limit: 50 }).then((res) => { setApiLogs(res.data); setLogsLoading(false) }).catch(() => setLogsLoading(false))
-  }, [selectedStrategyId, timeRange])
+  }, [selectedStrategyId])
 
   const loadAssets = useCallback((accountId: number) => {
     setAssetLoading(true)
@@ -92,7 +73,8 @@ export function useDashboardState() {
       const interval = parseInt(res.data.refresh_interval, 10) || 0
       setRefreshInterval(interval)
     }).catch(() => {})
-  }, [])
+    // 依赖 loadBaseData：selectedStrategyId 变化时触发刷新
+  }, [loadBaseData])
 
   const hasRunning = instances.some(inst => inst.status === 'running')
   const effectiveInterval = hasRunning ? (refreshInterval as number) * 2 : (refreshInterval as number)
@@ -137,10 +119,8 @@ export function useDashboardState() {
     // strategy filter
     selectedStrategyId, setSelectedStrategyId,
     // loading flags
-    assetLoading, positionsLoading, summaryLoading, ordersLoading, logsLoading, kpiLoading,
+    assetLoading, positionsLoading, summaryLoading, ordersLoading, logsLoading, kpiLoading, pnlLoading,
     // refresh
     lastRefresh, refreshInterval, effectiveInterval, hasRunning, handleRefreshAssets,
-    // chart
-    timeRange, setTimeRange,
   }
 }

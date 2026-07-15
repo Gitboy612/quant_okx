@@ -1,4 +1,5 @@
 from .base import OKXBaseClient
+from .exceptions import OKXAPIException
 from urllib.parse import urlencode
 
 
@@ -107,8 +108,8 @@ class TradeAPI:
         resp = await self._client._request("GET", path, is_private=True)
         return resp.get("data", [])
 
-    async def get_fills_history(self, instType: str, after: str = None, before: str = None, limit: str = None):
-        params = {"instType": instType, "after": after, "before": before, "limit": limit}
+    async def get_fills_history(self, instType: str, instId: str = None, after: str = None, before: str = None, limit: str = None):
+        params = {"instType": instType, "instId": instId, "after": after, "before": before, "limit": limit}
         path = "/api/v5/trade/fills-history" + _build_query(params)
         resp = await self._client._request("GET", path, is_private=True)
         return resp.get("data", [])
@@ -131,4 +132,32 @@ class TradeAPI:
 
     async def cancel_algos(self, orders: list):
         resp = await self._client._request("POST", "/api/v5/trade/cancel-algos", body=orders, is_private=True)
+        return resp
+
+    async def set_leverage(self, inst_id: str, lever: int, mgn_mode: str = "cross", pos_side: str | None = None) -> dict:
+        """设置合约杠杆倍数与持仓模式。
+
+        Args:
+            inst_id: 合约ID 如 ETH-USDT-SWAP
+            lever: 杠杆倍数 1-125
+            mgn_mode: cross(全仓) / isolated(逐仓)
+            pos_side: 单向持仓可不传；双向持仓 long/short
+        Returns:
+            OKX 响应 dict
+        Raises:
+            OKXAPIException: 当 OKX 返回 code != 0 时抛出，msg 含错误码映射后的可读描述
+        """
+        body = _build_body({
+            "instId": inst_id,
+            "lever": str(lever),
+            "mgnMode": mgn_mode,
+            "posSide": pos_side,
+        })
+        resp = await self._client._request("POST", "/api/v5/account/set-leverage", body=body, is_private=True)
+        code = str(resp.get("code", "-1"))
+        if code != "0":
+            err_desc = resp.get("_error_desc", "")
+            msg = resp.get("msg", "")
+            detail = f"{msg} | {err_desc}" if err_desc else msg
+            raise OKXAPIException(code=code, msg=detail, endpoint="/api/v5/account/set-leverage")
         return resp

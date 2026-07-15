@@ -2,10 +2,13 @@
 
 按币种 / 策略类型 / 时间段聚合盈亏，支持下钻查看订单明细。
 
-数据来源说明：
-- Order 表无 realized_pnl 字段，按币种归因时直接从订单成交价/数量计算 realized_pnl
-  （掌柜算法简化版：卖出成交价 - 加权平均买入价）。
-- PnlRecord.realized_pnl 是按策略实例累计值，按策略类型 / 时间段归因时以 PnlRecord 为准。
+数据来源说明（三维度统一基于 PnlRecord，避免口径打架）：
+- by_symbol：查询 StrategyInstance（按 symbol 分组）+ 各实例时间窗口内最新 PnlRecord，
+  聚合 realized_pnl / unrealized_pnl / net_position / total_fee / order_count；
+  avg_buy_price 按 |net_position| 加权平均；时间过滤字段为 PnlRecord.recorded_at。
+- by_strategy_type / by_period：同样以 PnlRecord 为 realized/unrealized 口径，
+  额外查询 Order 仅用于交易次数 / 胜率 / 平均收益率等订单维度指标。
+- PnlRecord.realized_pnl 为按策略实例累计值，三维度均取累计口径，保证一致。
 - StrategyInstance 通过 template_id 关联 StrategyTemplate.strategy_type。
 """
 
@@ -56,62 +59,113 @@ class AttributionService:
         start_date: str,
         end_date: str,
     ) -> list[dict]:
-        """按币种聚合盈亏。
+        """按币种聚合盈亏（基于 PnlRecord，与 by_strategy_type / by_period 口径一致）。
 
-        直接查询 orders 表，按 symbol 分组，计算每个 symbol 的
-        realized_pnl、手续费、交易次数、胜率、盈亏占比。
+        流程：
+        1. 查询 StrategyInstance（account_id + status in [running, paused, stopped]）。
+        2. 按 symbol 分组策略实例。
+        3. 查询时间窗口内的 PnlRecord（按 recorded_at 过滤），每个实例取最新一条。
+        4. 聚合各实例 latest PnlRecord：
+           - realized_pnl / unrealized_pnl / net_position / total_fee / order_count 求和；
+           - avg_buy_price 按 |net_position| 加权平均（全 0 时取简单平均或 0）。
+        5. realized_pnl 取累计口径（latest.realized_pnl 求和），与 by_strategy_type 一致。
         """
         start_dt = _parse_dt(start_date)
         end_dt = _parse_dt(end_date)
 
-        query = db.query(Order).filter(Order.account_id == account_id)
+        # 1. 查询该账户下所有活跃/已停止的策略实例
+        instances = (
+            db.query(StrategyInstance)
+            .filter(StrategyInstance.account_id == account_id)
+            .filter(StrategyInstance.status.in_(["running", "paused", "stopped"]))
+            .all()
+        )
+        if not instances:
+            return []
+
+        # 2. 查询时间窗口内的 PnlRecord（按 recorded_at 过滤，与 by_strategy_type 一致）
+        pnl_q = db.query(PnlRecord).filter(PnlRecord.account_id == account_id)
         if start_dt:
-            query = query.filter(Order.created_at >= start_dt)
+            pnl_q = pnl_q.filter(PnlRecord.recorded_at >= start_dt)
         if end_dt:
-            query = query.filter(Order.created_at <= end_dt)
-        orders = query.all()
+            pnl_q = pnl_q.filter(PnlRecord.recorded_at <= end_dt)
+        pnl_records = pnl_q.all()
 
-        groups: dict[str, list[Order]] = defaultdict(list)
-        for o in orders:
-            groups[o.symbol].append(o)
+        # 3. 每个策略实例在时间窗口内的最新 PnL 快照（与 by_strategy_type 同算法）
+        series_by_inst: dict[int, list[PnlRecord]] = defaultdict(list)
+        for r in pnl_records:
+            sid = r.strategy_instance_id
+            if sid is None:
+                continue
+            series_by_inst[sid].append(r)
+        latest_by_inst: dict[int, PnlRecord] = {}
+        for sid, recs in series_by_inst.items():
+            recs.sort(key=lambda x: x.recorded_at)
+            latest_by_inst[sid] = recs[-1]
 
-        # 先算出各 symbol 的 realized_pnl，用于计算 pnl_percentage
+        # 4. 按 symbol 分组策略实例
+        instances_by_symbol: dict[str, list[StrategyInstance]] = defaultdict(list)
+        for inst in instances:
+            instances_by_symbol[inst.symbol].append(inst)
+
+        # 5. 对每个 symbol 聚合各实例的 latest PnlRecord
         rows: list[dict] = []
         total_abs_pnl = 0.0
-        for symbol, sym_orders in groups.items():
-            filled = [o for o in sym_orders if (o.status or "") == "filled"]
-            if not filled:
-                continue
-            buys = [o for o in filled if (o.side or "").lower() == "buy"]
-            sells = [o for o in filled if (o.side or "").lower() == "sell"]
-
-            total_buy_qty = sum(_order_qty(o) for o in buys)
-            total_buy_notional = sum(_order_px(o) * _order_qty(o) for o in buys)
-            avg_buy_price = (total_buy_notional / total_buy_qty) if total_buy_qty else 0.0
-
-            fee = sum(float(o.fee or 0) for o in filled)
+        for symbol, insts in instances_by_symbol.items():
             realized = 0.0
-            wins = 0
-            for s in sells:
-                sell_px = _order_px(s)
-                sell_qty = _order_qty(s)
-                realized += (sell_px - avg_buy_price) * sell_qty
-                if avg_buy_price > 0 and sell_px > avg_buy_price:
-                    wins += 1
+            unrealized = 0.0
+            net_position = 0.0
+            total_fee = 0.0
+            order_count = 0
+            # avg_buy_price 加权平均用
+            weighted_price_sum = 0.0
+            weight_sum = 0.0
+            simple_price_sum = 0.0
+            price_count = 0
+            has_pnl = False
 
-            win_rate = (wins / len(sells)) if sells else 0.0
-            pnl_percentage = (realized / total_buy_notional * 100) if total_buy_notional else 0.0
+            for inst in insts:
+                latest = latest_by_inst.get(inst.id)
+                if not latest:
+                    continue
+                has_pnl = True
+                realized += float(latest.realized_pnl or 0)
+                unrealized += float(latest.unrealized_pnl or 0)
+                net_position += float(latest.net_position or 0)
+                total_fee += float(latest.total_fee or 0)
+                order_count += int(latest.order_count or 0)
+
+                price = float(latest.avg_buy_price or 0)
+                weight = abs(float(latest.net_position or 0))
+                weighted_price_sum += price * weight
+                weight_sum += weight
+                simple_price_sum += price
+                price_count += 1
+
+            # 该 symbol 下无任何 PnL 记录则跳过
+            if not has_pnl:
+                continue
+
+            # avg_buy_price 按 |net_position| 加权平均；全 0 时取简单平均或 0
+            if weight_sum > 0:
+                avg_buy_price = weighted_price_sum / weight_sum
+            elif price_count > 0:
+                avg_buy_price = simple_price_sum / price_count
+            else:
+                avg_buy_price = 0.0
+
             rows.append({
                 "symbol": symbol,
                 "realized_pnl": round(realized, 4),
-                "fee": round(fee, 6),
-                "trade_count": len(filled),
-                "win_rate": round(win_rate, 4),
-                "pnl_percentage": round(pnl_percentage, 4),
+                "unrealized_pnl": round(unrealized, 4),
+                "net_position": round(net_position, 6),
+                "avg_buy_price": round(avg_buy_price, 6),
+                "total_fee": round(total_fee, 6),
+                "order_count": order_count,
             })
             total_abs_pnl += abs(realized)
 
-        # pnl_percentage 已是相对投入资金的百分比；此处额外归一化各 symbol 占总盈亏比例
+        # 各 symbol 盈亏占比（相对总绝对盈亏归一化）
         for row in rows:
             row["pnl_share"] = (
                 round(abs(row["realized_pnl"]) / total_abs_pnl * 100, 4)

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
+import { Lock, PieChart, Blocks, FlaskConical, Shield, Zap } from 'lucide-react'
 import { login } from '../api/auth'
 import { useAuth } from '../hooks/useAuth'
 import qstudioLogo3dSrc from '../assets/Logo.jpg'
@@ -244,6 +245,55 @@ function Logo3D() {
   )
 }
 
+/* ---------- Platform Highlights（平台差异化卖点展示） ---------- */
+const platformHighlights = [
+  { icon: Lock, title: '本地优先隐私', desc: 'API Key 本地加密不上传' },
+  { icon: PieChart, title: '仓位隔离归因', desc: '多策略同品种独立 PnL' },
+  { icon: Blocks, title: '可视化积木', desc: 'DSL 拖拽构建策略' },
+  { icon: FlaskConical, title: '回测即实盘', desc: '参数一键导出实盘' },
+  { icon: Shield, title: '多层风控', desc: '资金·杠杆·保证金·冲突' },
+  { icon: Zap, title: '网格快速响应', desc: '事件驱动+波动快速路径' },
+]
+
+function PlatformHighlights() {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: 0.9, duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
+      className="mt-8"
+    >
+      <div className="text-center text-[10px] text-[#505C78] uppercase tracking-[0.2em] mb-3">平台亮点</div>
+      <div className="grid grid-cols-2 gap-2">
+        {platformHighlights.map((h, i) => {
+          const Icon = h.icon
+          return (
+            <motion.div
+              key={h.title}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 1.0 + i * 0.06, duration: 0.4 }}
+              whileHover={{
+                boxShadow: '0 0 16px rgba(0, 212, 170, 0.10)',
+                borderColor: 'rgba(0, 212, 170, 0.18)',
+              }}
+              className="glass-card rounded-lg p-2.5 flex items-start gap-2"
+            >
+              <div className="shrink-0 mt-0.5">
+                <Icon className="w-3.5 h-3.5 text-[#00D4AA]" />
+              </div>
+              <div className="min-w-0">
+                <div className="text-[11px] font-semibold text-[#EDF0F7] leading-tight">{h.title}</div>
+                <div className="text-[9px] text-[#7B86A2] leading-tight mt-0.5">{h.desc}</div>
+              </div>
+            </motion.div>
+          )
+        })}
+      </div>
+    </motion.div>
+  )
+}
+
 /* ---------- Login Page ---------- */
 export default function LoginPage() {
   const navigate = useNavigate()
@@ -404,6 +454,9 @@ export default function LoginPage() {
           >
             Powered by OKX API · AES-256 Encrypted
           </motion.p>
+
+          {/* 平台亮点 — 差异化卖点展示 */}
+          {!showOpening && <PlatformHighlights />}
         </motion.div>
       </div>
     </>

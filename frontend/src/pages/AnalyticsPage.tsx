@@ -4,7 +4,7 @@ import {
   PieChart, Pie, Cell, BarChart, Bar, AreaChart, Area,
   XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, Legend,
 } from 'recharts'
-import { X, ChevronRight } from 'lucide-react'
+import { X, ChevronRight, Info } from 'lucide-react'
 import { useSelectedAccount } from '../hooks/useSelectedAccount'
 import {
   getAttributionBySymbol,
@@ -197,6 +197,12 @@ export default function AnalyticsPage() {
             {t.label}
           </button>
         ))}
+      </div>
+
+      {/* 口径说明 */}
+      <div className="flex items-start gap-1.5 text-xs text-[#7B86A2]">
+        <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+        <span>口径说明：已实现盈亏为累计口径（策略启动至今累计已实现盈亏），未实现盈亏为期末值（当前未平仓持仓的浮动盈亏）。</span>
       </div>
 
       {selectedAccountId == null ? (

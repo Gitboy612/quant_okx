@@ -308,12 +308,28 @@ class ComposableStrategy(BaseStrategy):
         self._load_daily_baseline()
 
         symbol = self._get_symbol()
-        await self._refresh_price(symbol)
+        # 启动阶段刷新价格：用 5s 超时包裹，避免 OKX 客户端内部重试阻塞 FSM 主循环启动。
+        # 超时/失败时使用 0.0 兜底价进入 FSM（主循环每 tick 会重新刷新）。
+        try:
+            await asyncio.wait_for(self._refresh_price(symbol), timeout=5.0)
+        except asyncio.TimeoutError:
+            self._record_event(
+                "warn",
+                f"ComposableStrategy: 启动刷新价格超时(5s)，使用兜底价 {self._last_price} 进入 FSM",
+            )
+        except Exception as e:
+            self._record_event("warn", f"ComposableStrategy: 启动刷新价格失败: {e}")
 
         ctx = self._build_context()
         if self._base_block is not None:
+            # on_start 含网络下单，用 10s 超时包裹避免 OKX 客户端内部重试阻塞 FSM 启动
             try:
-                await self._base_block.on_start(ctx)
+                await asyncio.wait_for(self._base_block.on_start(ctx), timeout=10.0)
+            except asyncio.TimeoutError:
+                self._record_event(
+                    "warn",
+                    "ComposableStrategy: on_start 超时(10s)，跳过初始挂单，FSM 主循环继续",
+                )
             except Exception as e:
                 self._record_event("error", f"ComposableStrategy: on_start 异常 {e}")
 
@@ -329,9 +345,20 @@ class ComposableStrategy(BaseStrategy):
 
         try:
             while self._running:
+                should_stop = False
+                network_error_this_tick = False
                 try:
                     # 每个 tick 刷新最新价并构建新 ctx（清空指标缓存）
-                    await self._refresh_price(symbol)
+                    # _refresh_price 不再抛出网络错误，内部计数并返回 False。
+                    # 用 5s 超时包裹，避免 OKX 客户端内部重试阻塞单 tick。
+                    try:
+                        await asyncio.wait_for(self._refresh_price(symbol), timeout=5.0)
+                    except asyncio.TimeoutError:
+                        if self._handle_network_error(asyncio.TimeoutError("refresh_price timeout")):
+                            break
+                        network_error_this_tick = True
+                    if not self._running:
+                        break  # _refresh_price 触发自动停止
                     ctx = self._build_context()
                     self._latest_ctx = ctx
 
@@ -343,12 +370,30 @@ class ComposableStrategy(BaseStrategy):
                     if current_state == "RUNNING":
                         try:
                             if self._base_block is not None:
-                                await self._base_block.on_tick(ctx)
+                                # on_tick 含网络操作，用 5s 超时避免 OKX 内部重试阻塞
+                                try:
+                                    await asyncio.wait_for(
+                                        self._base_block.on_tick(ctx), timeout=5.0
+                                    )
+                                except asyncio.TimeoutError:
+                                    if self._handle_network_error(
+                                        asyncio.TimeoutError("on_tick timeout")
+                                    ):
+                                        should_stop = True
+                                    else:
+                                        network_error_this_tick = True
                         except Exception as e:
-                            # 网络错误上抛由主循环统一退避；其他异常容错记录
+                            # 网络错误：计数但不跳过条件求值（使用缓存价）
                             if self._is_network_error(e):
-                                raise
-                            self._handle_error(ctx, f"on_tick 异常: {e}")
+                                if self._handle_network_error(e):
+                                    should_stop = True
+                                else:
+                                    network_error_this_tick = True
+                            else:
+                                self._handle_error(ctx, f"on_tick 异常: {e}")
+
+                    if should_stop:
+                        break
 
                     # 检查当前状态的所有出边转换
                     for transition in self._fsm.transitions_from(current_state):
@@ -361,7 +406,11 @@ class ComposableStrategy(BaseStrategy):
                             guard_passed = await self._evaluate_guard(transition, ctx)
                         except Exception as e:
                             if self._is_network_error(e):
-                                raise
+                                if self._handle_network_error(e):
+                                    should_stop = True
+                                    break
+                                network_error_this_tick = True
+                                continue
                             self._handle_error(ctx, f"guard 评估异常: {e}")
                             continue
 
@@ -369,12 +418,22 @@ class ComposableStrategy(BaseStrategy):
                             continue
 
                         # guard 通过：执行动作
+                        action_failed = False
                         try:
                             await self._execute_actions(transition.actions, ctx)
                         except Exception as e:
                             if self._is_network_error(e):
-                                raise
-                            self._handle_error(ctx, f"action 执行异常: {e}")
+                                if self._handle_network_error(e):
+                                    should_stop = True
+                                    break
+                                network_error_this_tick = True
+                                action_failed = True
+                            else:
+                                self._handle_error(ctx, f"action 执行异常: {e}")
+                                action_failed = True
+
+                        if action_failed:
+                            continue  # 不迁移状态，继续下一条转换
 
                         # 状态迁移
                         old_state = current_state
@@ -385,8 +444,12 @@ class ComposableStrategy(BaseStrategy):
                             await self._enter_state(current_state, ctx)
                         except Exception as e:
                             if self._is_network_error(e):
-                                raise
-                            self._handle_error(ctx, f"enter_state 异常: {e}")
+                                if self._handle_network_error(e):
+                                    should_stop = True
+                                    break
+                                network_error_this_tick = True
+                            else:
+                                self._handle_error(ctx, f"enter_state 异常: {e}")
 
                         # 记录冷却
                         self._last_triggered[transition.rule_name] = ctx.tick_ts
@@ -399,9 +462,13 @@ class ComposableStrategy(BaseStrategy):
                         # 每个 tick 只执行一个转换
                         break
 
-                    # tick 成功完成：重置网络错误计数与退避
-                    self._consecutive_errors = 0
-                    self._backoff_delay = 1.0
+                    if should_stop:
+                        break
+
+                    # tick 无网络错误：重置网络错误计数与退避
+                    if not network_error_this_tick:
+                        self._consecutive_errors = 0
+                        self._backoff_delay = 1.0
 
                 except (httpx.HTTPError, OSError, ConnectionError) as e:
                     if self._handle_network_error(e):
@@ -417,7 +484,10 @@ class ComposableStrategy(BaseStrategy):
                     await asyncio.sleep(self._backoff_delay)
                     continue
 
-                await asyncio.sleep(tick_interval)
+                if network_error_this_tick:
+                    await asyncio.sleep(self._backoff_delay)
+                else:
+                    await asyncio.sleep(tick_interval)
         finally:
             # 停止处理：调用基础策略 on_stop 清理
             try:
@@ -465,21 +535,30 @@ class ComposableStrategy(BaseStrategy):
             realized_pnl=self._realized_pnl,
         )
 
-    async def _refresh_price(self, symbol: str) -> None:
+    async def _refresh_price(self, symbol: str) -> bool:
         """刷新 ``self._last_price``（最新成交价）。
 
-        网络错误向上抛出，由主循环统一退避处理；非网络错误保留旧值。
+        网络错误不再向上抛出（避免跳过条件求值），而是记录错误计数并返回 False。
+        主循环依据返回值决定是否退避，但条件求值仍然继续（使用上次缓存价）。
+        非网络错误保留旧值并返回 False。
+
+        Returns:
+            True 表示刷新成功；False 表示刷新失败（网络或非网络错误）。
         """
         if not symbol:
-            return
+            return False
         try:
             data = await self.client.get_ticker(symbol)
             if data:
                 self._last_price = float(data[0]["last"])
+                return True
         except Exception as e:
             if self._is_network_error(e):
-                raise
-            # 非网络错误：保留旧值，继续
+                # 网络错误：计数但不跳过条件求值
+                if self._handle_network_error(e):
+                    return False
+            # 非网络错误：保留旧值
+        return False
 
     # ============================================================
     # guard 评估
@@ -773,8 +852,15 @@ class ComposableStrategy(BaseStrategy):
                     return False
 
         # 5.2 stop_loss / take_profit: 未实现盈亏率触发阈值
+        # 用 5s 超时包裹 get_positions，避免 OKX 客户端内部重试阻塞条件求值。
+        # 超时返回 None（无持仓），跳过风控，让条件求值继续。
         if rf.stop_loss is not None or rf.take_profit is not None:
-            upl_ratio = await self._get_unrealized_pnl_ratio(ctx)
+            try:
+                upl_ratio = await asyncio.wait_for(
+                    self._get_unrealized_pnl_ratio(ctx), timeout=5.0
+                )
+            except asyncio.TimeoutError:
+                upl_ratio = None
             if upl_ratio is not None:
                 if rf.stop_loss is not None and upl_ratio <= -abs(rf.stop_loss):
                     await self._trigger_risk_stop(ctx, "stop_loss", {
@@ -874,14 +960,14 @@ class ComposableStrategy(BaseStrategy):
         if self._cached_equity_ts > 0 and (now - self._cached_equity_ts) < 5.0:
             return self._cached_equity
         try:
-            balance = await self.client.get_balance()
+            balance = await asyncio.wait_for(self.client.get_balance(), timeout=5.0)
             data = balance.get("data", []) if isinstance(balance, dict) else []
             if data:
                 equity = float(data[0].get("totalEq", 0) or 0)
                 self._cached_equity = equity
                 self._cached_equity_ts = now
                 return equity
-        except Exception:
+        except (asyncio.TimeoutError, Exception):
             pass
         return self._cached_equity
 
@@ -922,7 +1008,9 @@ class ComposableStrategy(BaseStrategy):
         if not symbol:
             return 0.0
         try:
-            positions = await ctx.client.get_positions()
+            positions = await asyncio.wait_for(
+                ctx.client.get_positions(), timeout=5.0
+            )
             for pos in positions:
                 inst_id = (pos.get("instId") if isinstance(pos, dict)
                            else getattr(pos, "instId", None))
@@ -930,7 +1018,7 @@ class ComposableStrategy(BaseStrategy):
                     pos_val = (pos.get("pos") if isinstance(pos, dict)
                                else getattr(pos, "pos", "0"))
                     return abs(float(pos_val or 0)) * price
-        except Exception:
+        except (asyncio.TimeoutError, Exception):
             pass
         return 0.0
 

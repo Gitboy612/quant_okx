@@ -197,7 +197,7 @@ class TestPnlSummary:
         """unrealized 取最新值 25，不是 5+15+25=45"""
         records = self._make_records_same_strategy()
         mock_db = self._make_mock_db(records)
-        result = get_pnl_summary(account_id=None, db=mock_db, user=MagicMock())
+        result = get_pnl_summary(account_id=None, strategy_instance_id=None, db=mock_db, user=MagicMock())
         assert result["total_unrealized_pnl"] == 25
         assert result["total_unrealized_pnl"] != 45
 
@@ -217,14 +217,14 @@ class TestPnlSummary:
             ),
         ]
         mock_db = self._make_mock_db(records)
-        result = get_pnl_summary(account_id=None, db=mock_db, user=MagicMock())
+        result = get_pnl_summary(account_id=None, strategy_instance_id=None, db=mock_db, user=MagicMock())
         assert len(result["by_strategy"]) == 2
 
     def test_summary_total_pnl(self):
         """total_pnl == total_realized + total_unrealized == 30 + 25 == 55"""
         records = self._make_records_same_strategy()
         mock_db = self._make_mock_db(records)
-        result = get_pnl_summary(account_id=None, db=mock_db, user=MagicMock())
+        result = get_pnl_summary(account_id=None, strategy_instance_id=None, db=mock_db, user=MagicMock())
         assert result["total_realized_pnl"] == 30
         assert result["total_unrealized_pnl"] == 25
         assert result["total_pnl"] == 30 + 25

@@ -1,0 +1,307 @@
+{
+  "check_type": "scheduled_function_check",
+  "started_at": "2026-07-13T18:31:07.774946+00:00",
+  "version": "1.0",
+  "checks": {
+    "theoretical_vs_actual_orders": {
+      "check": "theoretical_vs_actual_orders",
+      "passed": false,
+      "per_strategy": [
+        {
+          "strategy_instance_id": 2,
+          "symbol": "ETH-USDT-SWAP",
+          "current_price": 1756.51,
+          "grid_levels": [
+            1746.5,
+            1749.5,
+            1752.5,
+            1755.5,
+            1758.5,
+            1761.5,
+            1764.5,
+            1767.5,
+            1770.5,
+            1773.5,
+            1776.5,
+            1779.5,
+            1782.5,
+            1785.5,
+            1788.5,
+            1791.5,
+            1794.5,
+            1797.5,
+            1800.5,
+            1803.5,
+            1806.5
+          ],
+          "actual_live_orders": 21,
+          "missing_levels": [
+            1758.5
+          ],
+          "missing_ratio": 0.048,
+          "price_mismatches": [],
+          "matched": true
+        },
+        {
+          "strategy_instance_id": 3,
+          "symbol": "BTC-USDT",
+          "current_price": 61914.5,
+          "grid_levels": [
+            62008.4,
+            62073.4,
+            62138.4,
+            62203.4,
+            62268.4,
+            62333.4,
+            62398.4,
+            62463.4,
+            62528.4,
+            62593.4,
+            62658.4,
+            62723.4,
+            62788.4,
+            62853.4,
+            62918.4,
+            62983.4,
+            63048.4,
+            63113.4,
+            63178.4,
+            63243.4,
+            63308.4
+          ],
+          "actual_live_orders": 112,
+          "missing_levels": [
+            62008.4,
+            62073.4,
+            62138.4,
+            62203.4,
+            62268.4,
+            62333.4,
+            62398.4,
+            62463.4,
+            62528.4,
+            62593.4,
+            62658.4,
+            62723.4,
+            62788.4,
+            62853.4,
+            62918.4,
+            62983.4,
+            63048.4,
+            63113.4,
+            63178.4,
+            63243.4,
+            63308.4
+          ],
+          "missing_ratio": 1.0,
+          "price_mismatches": [
+            {
+              "order_id": "3737957935982186500",
+              "side": "sell",
+              "actual": 64603.9,
+              "nearest_level": 63308.4,
+              "diff": 1295.5
+            },
+            {
+              "order_id": "3737957935982186499",
+              "side": "sell",
+              "actual": 64538.9,
+              "nearest_level": 63308.4,
+              "diff": 1230.5
+            },
+            {
+              "order_id": "3737957935982186498",
+              "side": "sell",
+              "actual": 64473.9,
+              "nearest_level": 63308.4,
+              "diff": 1165.5
+            },
+            {
+              "order_id": "3737957935982186503",
+              "side": "sell",
+              "actual": 64798.9,
+              "nearest_level": 63308.4,
+              "diff": 1490.5
+            },
+            {
+              "order_id": "3737957935982186501",
+              "side": "sell",
+              "actual": 64668.9,
+              "nearest_level": 63308.4,
+              "diff": 1360.5
+            },
+            {
+              "order_id": "3737957935982186502",
+              "side": "sell",
+              "actual": 64733.9,
+              "nearest_level": 63308.4,
+              "diff": 1425.5
+            },
+            {
+              "order_id": "3737958530331840512",
+              "side": "sell",
+              "actual": 64408.9,
+              "nearest_level": 63308.4,
+              "diff": 1100.5
+            },
+            {
+              "order_id": "3737958522010341376",
+              "side": "sell",
+              "actual": 64343.9,
+              "nearest_level": 63308.4,
+              "diff": 1035.5
+            },
+            {
+              "order_id": "3737960259022622720",
+              "side": "sell",
+              "actual": 64278.9,
+              "nearest_level": 63308.4,
+              "diff": 970.5
+            },
+            {
+              "order_id": "3737981423279280128",
+              "side": "sell",
+              "actual": 64148.9,
+              "nearest_level": 63308.4,
+              "diff": 840.5
+            },
+            {
+              "order_id": "3737981699734245376",
+              "side": "sell",
+              "actual": 64213.9,
+              "nearest_level": 63308.4,
+              "diff": 905.5
+            },
+            {
+              "order_id": "3738039149384568832",
+              "side": "sell",
+              "actual": 64083.9,
+              "nearest_level": 63308.4,
+              "diff": 775.5
+            },
+            {
+              "order_id": "3738039875871576064",
+              "side": "sell",
+              "actual": 64018.9,
+              "nearest_level": 63308.4,
+              "diff": 710.5
+            },
+            {
+              "order_id": "3738065682719444992",
+              "side": "sell",
+              "actual": 63953.9,
+              "nearest_level": 63308.4,
+              "diff": 645.5
+            },
+            {
+              "order_id": "3738066857258782720",
+              "side": "sell",
+              "actual": 63888.9,
+              "nearest_level": 63308.4,
+              "diff": 580.5
+            },
+            {
+              "order_id": "3738071209503494144",
+              "side": "sell",
+              "actual": 63823.9,
+              "nearest_level": 63308.4,
+              "diff": 515.5
+            },
+            {
+              "order_id": "3738120797216182272",
+              "side": "sell",
+              "actual": 63758.9,
+              "nearest_level": 63308.4,
+              "diff": 450.5
+            },
+            {
+              "order_id": "3738124805628628992",
+              "side": "sell",
+              "actual": 63693.9,
+              "nearest_level": 63308.4,
+              "diff": 385.5
+            },
+            {
+              "order_id": "3738142552097951744",
+              "side": "sell",
+              "actual": 63628.9,
+              "nearest_level": 63308.4,
+              "diff": 320.5
+            },
+            {
+              "order_id": "3738149845925498880",
+              "side": "sell",
+              "actual": 63563.9,
+              "nearest_level": 63308.4,
+              "diff": 255.5
+            }
+          ],
+          "matched": false
+        }
+      ]
+    },
+    "strategy_errors": {
+      "check": "strategy_errors",
+      "passed": true,
+      "error_count": 0,
+      "errors_by_type": [],
+      "recent_errors": []
+    },
+    "actual_pnl": {
+      "check": "actual_pnl",
+      "passed": true,
+      "per_strategy": [
+        {
+          "strategy_instance_id": 2,
+          "symbol": "ETH-USDT-SWAP",
+          "okx_realized_pnl": 2.498875,
+          "db_fifo_realized_pnl": 3.094817,
+          "db_realized_pnl": 3.094817,
+          "accounting_diff": 0.0,
+          "okx_vs_db_fifo_diff": 0.595942,
+          "pnl_record_diff": 0.595942,
+          "diff": 0.595942,
+          "okx_drift_match": true,
+          "coverage_match": true,
+          "okx_fetch_succeeded": true,
+          "matched": true,
+          "trade_count": 356,
+          "db_trade_count": 388,
+          "fills_coverage": 0.994,
+          "okx_fills_count": 790,
+          "db_filled_count": 795
+        },
+        {
+          "strategy_instance_id": 3,
+          "symbol": "BTC-USDT",
+          "okx_realized_pnl": -20.83717,
+          "db_fifo_realized_pnl": -26.959782,
+          "db_realized_pnl": -26.959782,
+          "accounting_diff": 0.0,
+          "okx_vs_db_fifo_diff": 6.122612,
+          "pnl_record_diff": 6.122612,
+          "diff": 6.122612,
+          "okx_drift_match": true,
+          "coverage_match": true,
+          "okx_fetch_succeeded": true,
+          "matched": true,
+          "trade_count": 1425,
+          "db_trade_count": 1081,
+          "fills_coverage": 1.001,
+          "okx_fills_count": 1985,
+          "db_filled_count": 1984
+        }
+      ],
+      "total_okx_pnl": -18.338295,
+      "total_db_fifo_pnl": -23.864965,
+      "total_db_pnl": -23.864965,
+      "total_diff": 5.52667,
+      "tolerance": 0.5,
+      "okx_drift_tolerance": 10.0,
+      "okx_coverage_threshold": 0.95
+    }
+  },
+  "finished_at": "2026-07-13T18:31:50.165738+00:00",
+  "duration_seconds": 42.391,
+  "overall_passed": false
+}

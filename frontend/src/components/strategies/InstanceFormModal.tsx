@@ -302,6 +302,78 @@ export default function InstanceFormModal({
                 )
               })}
             </div>
+
+            {/* 投入资金上限（策略通用，0=不限制） */}
+            <div className="mt-3">
+              <label className="text-xs text-[#6B6B7B]">
+                投入资金上限
+                <span className="text-xs text-[#6B6B7B]/50 ml-1">(USDT, 0=不限制)</span>
+              </label>
+              <NumberInput
+                value={typeof customParams.investment_amount === 'number' ? (customParams.investment_amount as number) : undefined}
+                onChange={(v) => {
+                  setCustomParams((prev) => ({ ...prev, investment_amount: v ?? 0 }))
+                }}
+                step="any"
+                min={0}
+                placeholder="0=不限制"
+                className="w-full bg-[#0C0C14] border border-[#1E1E28] rounded-md px-3 py-1.5 text-sm text-[#E8E8ED] mt-1 focus:outline-none focus:border-[#00D4AA] font-mono"
+              />
+            </div>
+
+            {/* 合约杠杆与持仓模式（仅合约品种显示，SubTask 2.4） */}
+            {isContractPair(String(customParams.symbol || '')) && (
+              <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-[#6B6B7B]">
+                    杠杆倍数
+                    <span className="text-xs text-[#6B6B7B]/50 ml-1">(1-125)</span>
+                  </label>
+                  <NumberInput
+                    value={typeof customParams.lever === 'number' ? (customParams.lever as number) : 1}
+                    onChange={(v) => {
+                      setCustomParams((prev) => ({ ...prev, lever: v ?? 1 }))
+                    }}
+                    step={1}
+                    min={1}
+                    max={125}
+                    className="w-full bg-[#0C0C14] border border-[#1E1E28] rounded-md px-3 py-1.5 text-sm text-[#E8E8ED] mt-1 focus:outline-none focus:border-[#00D4AA] font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-[#6B6B7B]">持仓模式</label>
+                  <Dropdown
+                    options={[
+                      { value: 'cross', label: '全仓' },
+                      { value: 'isolated', label: '逐仓' },
+                    ]}
+                    value={String(customParams.td_mode ?? 'cross')}
+                    onChange={(v) => {
+                      setCustomParams((prev) => ({ ...prev, td_mode: v }))
+                    }}
+                    className="mt-1 w-full"
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Task 9: post_only（只挂 maker）开关，仅合约/限价策略显示，默认关闭 */}
+            {isContractPair(String(customParams.symbol || '')) && (
+              <div className="mt-3 flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={Boolean(customParams.post_only)}
+                  onChange={(e) => {
+                    setCustomParams((prev) => ({ ...prev, post_only: e.target.checked }))
+                  }}
+                  className="w-4 h-4 accent-[#00D4AA]"
+                />
+                <label className="text-xs text-[#6B6B7B]">
+                  Post-only（只挂 Maker）
+                  <span className="text-xs text-[#6B6B7B]/50 ml-1">(被拒时自动降级为 limit 重挂)</span>
+                </label>
+              </div>
+            )}
           </div>
 
           <button

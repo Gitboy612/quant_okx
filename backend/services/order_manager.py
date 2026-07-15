@@ -1,7 +1,11 @@
 import asyncio
+import logging
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Callable
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -64,6 +68,9 @@ class OrderManager:
         self._running: bool = True
         # 持有持久化 task 的强引用，避免被事件循环弱引用 GC 回收
         self._pending_persist_tasks: set = set()
+        # SubTask 7.4: 下单/成交时间戳（内存字典，避免 DB 迁移）
+        self._place_ts_map: dict[str, float] = {}
+        self._fill_ts_map: dict[str, float] = {}
         # 净持仓状态（用于未实现盈亏计算）
         self._net_position: float = 0.0       # 净持仓量（买入累计 - 卖出累计）
         self._avg_buy_price: float = 0.0       # 加权平均买入价
@@ -92,6 +99,8 @@ class OrderManager:
             settle_ccy=settle_ccy,
             actual_qty=actual_qty,
         )
+        # SubTask 7.4: 记录下单时间戳
+        self._place_ts_map[ordId] = time.time()
         self._orders[ordId] = order
         self._async_persist(order)
         return order
@@ -116,16 +125,19 @@ class OrderManager:
         for key, value in kwargs.items():
             if hasattr(order, key):
                 setattr(order, key, value)
-        # 若更新了 fillSz 且 actual_qty 未被显式传入，则根据 sz 和 ct_val 重新计算 actual_qty
+        # 若更新了 fillSz 且 actual_qty 未被显式传入，则根据 fillSz 和 ct_val 重新计算 actual_qty
+        # 注意：不能用 not order.actual_qty 守卫，因为 add_order 已设置 actual_qty=sz*ct_val，
+        # 会导致成交后 actual_qty 永远不更新为 fillSz*ct_val（委托量≠成交量时产生误差）
         if "fillSz" in kwargs and "actual_qty" not in kwargs:
-            if not order.actual_qty:
-                fill_sz_float = float(order.fillSz) if order.fillSz else 0.0
-                sz_float = float(order.sz) if order.sz else 0.0
-                base_qty = fill_sz_float if fill_sz_float > 0 else sz_float
-                order.actual_qty = base_qty * (order.ct_val or 1.0)
+            fill_sz_float = float(order.fillSz) if order.fillSz else 0.0
+            sz_float = float(order.sz) if order.sz else 0.0
+            base_qty = fill_sz_float if fill_sz_float > 0 else sz_float
+            order.actual_qty = base_qty * (order.ct_val or 1.0)
         new_state = order.state
         if new_state != old_state:
             if new_state == "filled":
+                # SubTask 7.4: 记录成交时间戳
+                self._fill_ts_map[ordId] = time.time()
                 self._update_position_on_filled(order)
                 self._trigger_callbacks("filled", order)
             elif new_state == "canceled":
@@ -193,6 +205,14 @@ class OrderManager:
             except (ValueError, TypeError):
                 return 0.0
         return 0.0
+
+    def get_order_latency(self, ordId: str) -> float | None:
+        """返回下单到成交的延迟（秒）。无记录返回 None（SubTask 7.4）。"""
+        place_ts = self._place_ts_map.get(ordId)
+        fill_ts = self._fill_ts_map.get(ordId)
+        if place_ts is None or fill_ts is None:
+            return None
+        return fill_ts - place_ts
 
     def get_active_orders(self) -> list[OrderInfo]:
         return [o for o in self._orders.values() if o.state in ("live", "partially_filled")]
@@ -318,10 +338,71 @@ class OrderManager:
                 )
                 db.add(new_order)
             db.commit()
-        except Exception:
+        except Exception as e:
             db.rollback()
+            # 并发竞争：两个线程同时 INSERT 同一 order_id，回退为 UPDATE
+            if "UNIQUE constraint" in str(e) and order.ordId:
+                try:
+                    from models.order import Order as _Order
+                    existing = db.query(_Order).filter(_Order.order_id == order.ordId).first()
+                    if existing:
+                        existing.state = order.state
+                        existing.status = self._map_state_to_status(order.state)
+                        existing.fill_px = float(order.fillPx) if order.fillPx else None
+                        existing.fill_sz = float(order.fillSz) if order.fillSz else None
+                        existing.fee = float(order.fee) if order.fee else None
+                        existing.filled_quantity = float(order.fillSz) if order.fillSz else 0
+                        existing.update_time = order.uTime
+                        existing.updated_at = datetime.now(timezone.utc)
+                        db.commit()
+                        return  # 竞争修复成功，不记录错误
+                except Exception as retry_err:
+                    db.rollback()
+                    logger.warning(f"_persist_to_db 竞争重试失败 ordId={order.ordId}: {retry_err}")
+            # 不再静默吞掉异常：记录日志 + 写 strategy_event，确保 orphan 订单可被发现与回补
+            logger.error(
+                f"OrderManager._persist_to_db 失败 strategy_instance_id={self._strategy_instance_id} "
+                f"ordId={order.ordId} symbol={order.symbol} side={order.side}: {e}",
+                exc_info=True,
+            )
+            self._record_persist_failure_event(order, str(e))
         finally:
             db.close()
+
+    def _record_persist_failure_event(self, order: OrderInfo, error_msg: str):
+        """订单持久化失败时写入 strategy_event，供审计/监控链路消费。"""
+        try:
+            db = self._db_session_factory()
+            try:
+                from models.strategy_event import StrategyEvent
+                event = StrategyEvent(
+                    strategy_instance_id=self._strategy_instance_id,
+                    event_type="order_persist_failed",
+                    message=(
+                        f"订单持久化失败 ordId={order.ordId} symbol={order.symbol} "
+                        f"side={order.side} state={order.state}: {error_msg}"
+                    ),
+                    details=__import__("json").dumps({
+                        "ordId": order.ordId,
+                        "clOrdId": order.clOrdId,
+                        "symbol": order.symbol,
+                        "side": order.side,
+                        "state": order.state,
+                        "error": error_msg,
+                    }, ensure_ascii=False),
+                    created_at=datetime.now(timezone.utc),
+                )
+                db.add(event)
+                db.commit()
+            except Exception:
+                db.rollback()
+        except Exception:
+            pass
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
 
     @staticmethod
     def _map_state_to_status(state: str) -> str:

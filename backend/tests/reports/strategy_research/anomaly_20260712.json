@@ -1,0 +1,147 @@
+[
+  {
+    "timestamp": "2026-07-12T04:14:22.483670+00:00",
+    "instance_id": 4,
+    "name": "classic_grid_23_ab_5_inst",
+    "symbol": "BTC-USDT",
+    "type": "position_mismatch",
+    "details": {
+      "account_id": 1,
+      "symbol": "BTC-USDT",
+      "virtual_total": 0.05,
+      "real_total": 0.0,
+      "diff": 0.05,
+      "tolerance": 0.0001,
+      "matched": false
+    },
+    "stop_reasons": [
+      "仓位严重偏差: diff=0.050000 (100.0%)"
+    ],
+    "snapshot": {
+      "instance_id": 4,
+      "name": "classic_grid_23_ab_5_inst",
+      "symbol": "BTC-USDT",
+      "status": "running",
+      "account_id": 1,
+      "template_id": 12,
+      "template_type": "composable",
+      "started_at": "2026-07-12T02:51:13.685783+00:00",
+      "run_days": 0.0577,
+      "latest_pnl": {
+        "realized": 0.0,
+        "unrealized": 1.5108250000000725,
+        "total": 1.5108250000000725,
+        "equity": 3202.2700350000005,
+        "net_position": 0.05,
+        "avg_buy_price": 64089.1,
+        "recorded_at": "2026-07-12T04:14:22.194438+00:00"
+      },
+      "metrics": {
+        "sharpe": 2.4101,
+        "max_drawdown": 0.9663,
+        "win_rate": 0.0,
+        "profit_loss_ratio": 0.0,
+        "wins": 0,
+        "losses": 0,
+        "total_trades": 0
+      },
+      "risk_events": {},
+      "total_risk_events": 0,
+      "consecutive_errors": 0,
+      "pnl_records_count": 17,
+      "pnl_continuous": true,
+      "orders_count": 1,
+      "reconcile": {
+        "account_id": 1,
+        "symbol": "BTC-USDT",
+        "virtual_total": 0.05,
+        "real_total": 0.0,
+        "diff": 0.05,
+        "tolerance": 0.0001,
+        "matched": false
+      },
+      "anomaly": {
+        "type": "position_mismatch",
+        "details": {
+          "account_id": 1,
+          "symbol": "BTC-USDT",
+          "virtual_total": 0.05,
+          "real_total": 0.0,
+          "diff": 0.05,
+          "tolerance": 0.0001,
+          "matched": false
+        }
+      },
+      "stop_reasons": [
+        "仓位严重偏差: diff=0.050000 (100.0%)"
+      ],
+      "params": {
+        "qs_model_config": {
+          "qs_model_version": "2.0",
+          "meta": {
+            "name": "classic_grid_23_ab_5",
+            "version": "1.0",
+            "base_symbol": "BTC-USDT",
+            "asset_class": "CRYPTO"
+          },
+          "params": {
+            "grid_count": {
+              "label": "网格数量",
+              "value": 5,
+              "type": "int",
+              "range": [
+                5,
+                100
+              ],
+              "unit": "格",
+              "description": "网格档位数量"
+            },
+            "order_qty": {
+              "label": "单格数量",
+              "value": 0.05,
+              "type": "float",
+              "range": [
+                0.001,
+                10.0
+              ],
+              "unit": "币",
+              "description": "单格交易量"
+            },
+            "lever": {
+              "label": "杠杆倍数",
+              "value": 1,
+              "type": "int",
+              "range": [
+                1,
+                20
+              ],
+              "unit": "x",
+              "description": "杠杆倍数（策略级参数，控制风险敞口）"
+            }
+          },
+          "logic": {
+            "version": "1.0",
+            "base_strategy": {
+              "kind": "grid",
+              "params": {
+                "upper_price": 70498.01,
+                "lower_price": 57680.19,
+                "grid_count": "$params.grid_count",
+                "order_qty": "$params.order_qty",
+                "symbol": "$meta.base_symbol"
+              }
+            },
+            "rules": []
+          },
+          "risk_filter": {
+            "daily_max_loss": 10.0,
+            "stop_loss": 0.05,
+            "take_profit": 0.1
+          }
+        },
+        "symbol": "BTC-USDT",
+        "investment_amount": 100.0
+      }
+    }
+  }
+]

@@ -187,8 +187,18 @@ class GridBlock:
         symbol = self.symbol
         current_price = ctx.current_price
         if current_price <= 0:
-            ticker = await client.get_ticker(symbol)
-            current_price = float(ticker[0]["last"]) if ticker else (self.lower_price + self.upper_price) / 2
+            try:
+                ticker = await client.get_ticker(symbol)
+                current_price = float(ticker[0]["last"]) if ticker else (self.lower_price + self.upper_price) / 2
+            except Exception as e:
+                # 网络错误：用区间中点兜底，跳过网格下单，让 FSM 主循环启动
+                current_price = (self.lower_price + self.upper_price) / 2
+                ctx.strategy._record_event(
+                    "warn",
+                    f"_place_grid_orders: get_ticker 失败, 用区间中点 {current_price} 兜底, 跳过网格下单: {e}",
+                )
+                ctx.current_price = current_price
+                return
             ctx.current_price = current_price
 
         buy_orders, sell_orders = [], []
@@ -220,28 +230,42 @@ class GridBlock:
             batch = buy_orders[batch_start:batch_start + BATCH]
             payload = [{"instId": symbol, "side": "buy", "ordType": "limit",
                         "sz": str(self.order_qty), "px": o["px"]} for o in batch]
-            resp = await client.batch_place_orders(payload)
-            if resp.get("code") == "0":
-                data = resp.get("data", [])
-                for j, o in enumerate(batch):
-                    if j < len(data) and data[j].get("sCode") == "0":
-                        oid = data[j].get("ordId", "")
-                        self.active_buy[o["idx"]] = oid
-                        await ctx.order_manager.add_order(oid, "", symbol, "buy", o["px"], str(self.order_qty), "live")
+            try:
+                resp = await client.batch_place_orders(payload)
+                if resp.get("code") == "0":
+                    data = resp.get("data", [])
+                    for j, o in enumerate(batch):
+                        if j < len(data) and data[j].get("sCode") == "0":
+                            oid = data[j].get("ordId", "")
+                            self.active_buy[o["idx"]] = oid
+                            await ctx.order_manager.add_order(oid, "", symbol, "buy", o["px"], str(self.order_qty), "live")
+            except Exception as e:
+                ctx.strategy._record_event(
+                    "warn",
+                    f"_place_grid_orders: 买单批次下单失败 (batch_start={batch_start}), 跳过: {e}",
+                )
+                return
             await asyncio.sleep(0.15)
 
         for batch_start in range(0, len(sell_orders), BATCH):
             batch = sell_orders[batch_start:batch_start + BATCH]
             payload = [{"instId": symbol, "side": "sell", "ordType": "limit",
                         "sz": str(self.order_qty), "px": o["px"]} for o in batch]
-            resp = await client.batch_place_orders(payload)
-            if resp.get("code") == "0":
-                data = resp.get("data", [])
-                for j, o in enumerate(batch):
-                    if j < len(data) and data[j].get("sCode") == "0":
-                        oid = data[j].get("ordId", "")
-                        self.active_sell[o["idx"]] = oid
-                        await ctx.order_manager.add_order(oid, "", symbol, "sell", o["px"], str(self.order_qty), "live")
+            try:
+                resp = await client.batch_place_orders(payload)
+                if resp.get("code") == "0":
+                    data = resp.get("data", [])
+                    for j, o in enumerate(batch):
+                        if j < len(data) and data[j].get("sCode") == "0":
+                            oid = data[j].get("ordId", "")
+                            self.active_sell[o["idx"]] = oid
+                            await ctx.order_manager.add_order(oid, "", symbol, "sell", o["px"], str(self.order_qty), "live")
+            except Exception as e:
+                ctx.strategy._record_event(
+                    "warn",
+                    f"_place_grid_orders: 卖单批次下单失败 (batch_start={batch_start}), 跳过: {e}",
+                )
+                return
             await asyncio.sleep(0.15)
 
     async def _restore_active_orders(self, ctx: ExecutionContext) -> None:
@@ -469,6 +493,7 @@ class GridBlock:
                             fillPx=info[0].get("fillPx", ""),
                             fillSz=info[0].get("fillSz", ""),
                             fee=info[0].get("fee", ""),
+                            uTime=info[0].get("uTime", ""),
                         )
             except Exception:
                 pass

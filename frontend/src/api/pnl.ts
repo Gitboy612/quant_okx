@@ -17,7 +17,7 @@ export function listPnlRecords(params: {
   return client.get<PnlRecord[]>('/pnl', { params: query })
 }
 
-export function getPnlSummary(params: { account_id?: number } = {}) {
+export function getPnlSummary(params: { account_id?: number; strategy_instance_id?: number } = {}) {
   return client.get<PnlSummary>('/pnl/summary', { params })
 }
 

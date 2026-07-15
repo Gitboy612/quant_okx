@@ -105,7 +105,7 @@ def _make_incremental_mock_db(new_orders, instance=None, latest_pnl=None):
 
     incremental_update 查询链路：
       - StrategyInstance: .filter().first()
-      - Order: .filter().filter().filter().order_by().all()  /  .filter().update()
+      - Order: .filter().filter().filter().all()  /  .filter().update()
       - PnlRecord: .filter().order_by().first()
     """
     mock_db = MagicMock()
@@ -115,7 +115,7 @@ def _make_incremental_mock_db(new_orders, instance=None, latest_pnl=None):
         if model is StrategyInstance:
             chain.filter.return_value.first.return_value = instance
         elif model is Order:
-            chain.filter.return_value.filter.return_value.filter.return_value.order_by.return_value.all.return_value = new_orders
+            chain.filter.return_value.filter.return_value.filter.return_value.all.return_value = new_orders
             chain.filter.return_value.update.return_value = 0
         elif model is PnlRecord:
             chain.filter.return_value.order_by.return_value.first.return_value = latest_pnl
@@ -257,11 +257,14 @@ async def test_incremental_update_single_order():
 
 @pytest.mark.asyncio
 async def test_incremental_update_10_orders():
-    """10 条订单 incremental_update 耗时 < 10ms。"""
+    """10 条订单 incremental_update 耗时 < 10ms。
+
+    基准 net_position=0（无基准买单），避免卖单匹配基准买单触发 recompute 委托。
+    """
     latest = MagicMock()
     latest.realized_pnl = 10.0
-    latest.net_position = 2.0
-    latest.avg_buy_price = 100.0
+    latest.net_position = 0.0
+    latest.avg_buy_price = 0.0
     latest.total_fee = 0.5
     latest.order_count = 5
     latest.equity = 5000.0

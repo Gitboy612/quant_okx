@@ -1,0 +1,95 @@
+{
+  "generated_at": "2026-07-12T12:26:04.152374+00:00",
+  "symbol": "BTC-USDT-SWAP",
+  "scenarios": [
+    {
+      "scenario": "pause_on_high",
+      "result": "GENERATE_FAILED",
+      "triggered_correctly": false,
+      "expected_triggers": [],
+      "actual_triggers": []
+    },
+    {
+      "scenario": "resume_on_low",
+      "result": "GENERATE_FAILED",
+      "triggered_correctly": false,
+      "expected_triggers": [],
+      "actual_triggers": []
+    },
+    {
+      "scenario": "rebalance_on_threshold",
+      "result": "GENERATE_FAILED",
+      "triggered_correctly": false,
+      "expected_triggers": [],
+      "actual_triggers": []
+    },
+    {
+      "scenario": "compound_rules",
+      "result": "GENERATE_FAILED",
+      "triggered_correctly": false,
+      "expected_triggers": [],
+      "actual_triggers": []
+    }
+  ],
+  "results": {
+    "pause_on_high": {
+      "scenario": "pause_on_high",
+      "symbol": "BTC-USDT-SWAP",
+      "started_at": "2026-07-12T12:26:04.151073+00:00",
+      "steps": [
+        {
+          "name": "generate_qsm",
+          "status": "FAIL",
+          "error": "run_strategy_test.<locals>._step() got multiple values for argument 'name'"
+        }
+      ],
+      "result": "GENERATE_FAILED"
+    },
+    "resume_on_low": {
+      "scenario": "resume_on_low",
+      "symbol": "BTC-USDT-SWAP",
+      "started_at": "2026-07-12T12:26:04.151672+00:00",
+      "steps": [
+        {
+          "name": "generate_qsm",
+          "status": "FAIL",
+          "error": "run_strategy_test.<locals>._step() got multiple values for argument 'name'"
+        }
+      ],
+      "result": "GENERATE_FAILED"
+    },
+    "rebalance_on_threshold": {
+      "scenario": "rebalance_on_threshold",
+      "symbol": "BTC-USDT-SWAP",
+      "started_at": "2026-07-12T12:26:04.151922+00:00",
+      "steps": [
+        {
+          "name": "generate_qsm",
+          "status": "FAIL",
+          "error": "run_strategy_test.<locals>._step() got multiple values for argument 'name'"
+        }
+      ],
+      "result": "GENERATE_FAILED"
+    },
+    "compound_rules": {
+      "scenario": "compound_rules",
+      "symbol": "BTC-USDT-SWAP",
+      "started_at": "2026-07-12T12:26:04.152218+00:00",
+      "steps": [
+        {
+          "name": "generate_qsm",
+          "status": "FAIL",
+          "error": "run_strategy_test.<locals>._step() got multiple values for argument 'name'"
+        }
+      ],
+      "result": "GENERATE_FAILED"
+    }
+  },
+  "summary": {
+    "pause_on_high": "GENERATE_FAILED",
+    "resume_on_low": "GENERATE_FAILED",
+    "rebalance_on_threshold": "GENERATE_FAILED",
+    "compound_rules": "GENERATE_FAILED"
+  },
+  "overall_passed": false
+}

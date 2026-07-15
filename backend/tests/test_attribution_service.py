@@ -1,11 +1,13 @@
 """PnL 归因分析服务的单元测试。
 
 覆盖：
-- get_attribution_by_symbol：按币种聚合 realized_pnl / fee / trade_count / win_rate
 - get_attribution_by_strategy_type：按策略类型聚合（关联 strategy_type）
 - get_attribution_by_period：按时间段聚合（daily/weekly/monthly）
 - get_drill_down：下钻查看订单明细（symbol / strategy_type 过滤）
 - _max_drawdown 辅助函数
+
+注意：get_attribution_by_symbol 的测试已迁移至 test_attribution_by_symbol.py
+（by_symbol 重构为基于 PnlRecord 聚合）。
 
 导入风格参考 conftest.py 与 test_pnl_algorithm_fix.py：顶部注入 backend 根目录到 sys.path。
 DB 查询使用 MagicMock 模拟 SQLAlchemy session 的链式调用。
@@ -52,7 +54,8 @@ def make_order(symbol="BTC-USDT", side="buy", status="filled", fill_px=100.0,
 
 
 def make_pnl_record(realized_pnl=0.0, unrealized_pnl=0.0, recorded_at=None,
-                    strategy_instance_id=1, account_id=1, order_count=0, equity=0.0):
+                    strategy_instance_id=1, account_id=1, order_count=0, equity=0.0,
+                    net_position=0.0, avg_buy_price=0.0, total_fee=0.0):
     return SimpleNamespace(
         id=1,
         account_id=account_id,
@@ -64,13 +67,13 @@ def make_pnl_record(realized_pnl=0.0, unrealized_pnl=0.0, recorded_at=None,
         order_count=order_count,
         recorded_at=recorded_at or datetime.now(timezone.utc),
         is_final=False,
-        net_position=0,
-        avg_buy_price=0,
-        total_fee=0,
+        net_position=net_position,
+        avg_buy_price=avg_buy_price,
+        total_fee=total_fee,
     )
 
 
-def make_instance(inst_id=1, template_id=1, account_id=1, symbol="BTC-USDT"):
+def make_instance(inst_id=1, template_id=1, account_id=1, symbol="BTC-USDT", status="stopped"):
     return SimpleNamespace(
         id=inst_id,
         template_id=template_id,
@@ -79,7 +82,7 @@ def make_instance(inst_id=1, template_id=1, account_id=1, symbol="BTC-USDT"):
         symbol=symbol,
         market_type="spot",
         params={},
-        status="stopped",
+        status=status,
     )
 
 
@@ -129,66 +132,9 @@ def make_mock_db(orders=None, pnl_records=None, instances=None, templates=None):
 
 
 # ---------------------------------------------------------------------------
-# 测试：按币种聚合
+# 注意：by_symbol 的单元测试已迁移至 test_attribution_by_symbol.py
+# （by_symbol 重构为基于 PnlRecord 聚合，旧 Order 逻辑测试已移除）
 # ---------------------------------------------------------------------------
-class TestAttributionBySymbol:
-    def test_aggregates_realized_pnl_and_fee(self):
-        """两个 symbol，验证 realized_pnl / fee / trade_count 正确聚合。"""
-        now = datetime.now(timezone.utc)
-        # BTC: 买入 2@100 (notional=200), 卖出 1@110 -> realized=(110-100)*1=10
-        # ETH: 买入 1@50, 卖出 1@45 -> realized=(45-50)*1=-5
-        orders = [
-            make_order(symbol="BTC-USDT", side="buy", fill_px=100, fill_sz=2, fee=0.2, created_at=now, order_id=1),
-            make_order(symbol="BTC-USDT", side="sell", fill_px=110, fill_sz=1, fee=0.1, created_at=now, order_id=2),
-            make_order(symbol="ETH-USDT", side="buy", fill_px=50, fill_sz=1, fee=0.05, created_at=now, order_id=3),
-            make_order(symbol="ETH-USDT", side="sell", fill_px=45, fill_sz=1, fee=0.05, created_at=now, order_id=4),
-        ]
-        db = make_mock_db(orders=orders)
-        svc = AttributionService()
-
-        result = svc.get_attribution_by_symbol(db, account_id=1,
-                                                start_date="2026-07-01T00:00:00",
-                                                end_date="2026-07-11T23:59:59")
-
-        assert len(result) == 2
-        # 按 realized_pnl 降序，BTC(10) 在前
-        btc = next(r for r in result if r["symbol"] == "BTC-USDT")
-        eth = next(r for r in result if r["symbol"] == "ETH-USDT")
-        assert btc["realized_pnl"] == pytest.approx(10.0, abs=1e-4)
-        assert btc["fee"] == pytest.approx(0.3, abs=1e-6)
-        assert btc["trade_count"] == 2
-        # BTC 卖出价 110 > 均价 100 -> 胜率 1.0
-        assert btc["win_rate"] == pytest.approx(1.0, abs=1e-4)
-        # ETH 卖出价 45 < 均价 50 -> 胜率 0.0
-        assert eth["realized_pnl"] == pytest.approx(-5.0, abs=1e-4)
-        assert eth["fee"] == pytest.approx(0.1, abs=1e-6)
-        assert eth["win_rate"] == pytest.approx(0.0, abs=1e-4)
-        # 降序校验
-        assert result[0]["realized_pnl"] >= result[1]["realized_pnl"]
-
-    def test_empty_orders_returns_empty_list(self):
-        db = make_mock_db(orders=[])
-        svc = AttributionService()
-        result = svc.get_attribution_by_symbol(db, account_id=1,
-                                               start_date="2026-07-01T00:00:00",
-                                               end_date="2026-07-11T23:59:59")
-        assert result == []
-
-    def test_non_filled_orders_excluded(self):
-        """canceled 订单不纳入聚合。"""
-        now = datetime.now(timezone.utc)
-        orders = [
-            make_order(symbol="BTC-USDT", side="buy", status="canceled", fill_px=100, fill_sz=1, created_at=now, order_id=1),
-            make_order(symbol="BTC-USDT", side="sell", status="filled", fill_px=110, fill_sz=1, created_at=now, order_id=2),
-        ]
-        db = make_mock_db(orders=orders)
-        svc = AttributionService()
-        result = svc.get_attribution_by_symbol(db, account_id=1,
-                                               start_date="2026-07-01T00:00:00",
-                                               end_date="2026-07-11T23:59:59")
-        # canceled 被过滤，只剩 1 笔 filled
-        assert len(result) == 1
-        assert result[0]["trade_count"] == 1
 
 
 # ---------------------------------------------------------------------------

@@ -62,7 +62,7 @@ def _make_fallback_mock_db(orders, instance=None, latest_pnl=None):
 
     用于 7.1：incremental_update 检测到无基准 PnlRecord 时会转执行 recompute，
     两者对 Order 的查询链路不同：
-      - incremental: .filter().filter().filter().order_by().all()
+      - incremental: .filter().filter().filter().all()
       - recompute:   .filter().filter().all()
     两者对 Order 的更新均为 .filter().update()。
     """
@@ -74,7 +74,7 @@ def _make_fallback_mock_db(orders, instance=None, latest_pnl=None):
             chain.filter.return_value.first.return_value = instance
         elif model is Order:
             chain.filter.return_value.filter.return_value.all.return_value = orders
-            chain.filter.return_value.filter.return_value.filter.return_value.order_by.return_value.all.return_value = orders
+            chain.filter.return_value.filter.return_value.filter.return_value.all.return_value = orders
             chain.filter.return_value.update.return_value = 0
         elif model is PnlRecord:
             chain.filter.return_value.order_by.return_value.first.return_value = latest_pnl
@@ -93,7 +93,7 @@ def _make_incremental_mock_db(new_orders, instance=None, latest_pnl=None):
         if model is StrategyInstance:
             chain.filter.return_value.first.return_value = instance
         elif model is Order:
-            chain.filter.return_value.filter.return_value.filter.return_value.order_by.return_value.all.return_value = new_orders
+            chain.filter.return_value.filter.return_value.filter.return_value.all.return_value = new_orders
             chain.filter.return_value.update.return_value = 0
         elif model is PnlRecord:
             chain.filter.return_value.order_by.return_value.first.return_value = latest_pnl
@@ -104,7 +104,10 @@ def _make_incremental_mock_db(new_orders, instance=None, latest_pnl=None):
 
 
 def _make_heartbeat_mock_db(instance=None, latest_pnl=None):
-    """mock DB，适配 heartbeat_snapshot 的查询链路（仅 StrategyInstance + PnlRecord）。"""
+    """mock DB，适配 heartbeat_snapshot 的查询链路（StrategyInstance + PnlRecord + Order）。
+
+    Order 查询返回空列表：heartbeat 无 latest 时调 recompute 兜底，recompute 查到空订单后返回 None。
+    """
     mock_db = MagicMock()
 
     def query_side_effect(model):
@@ -113,6 +116,9 @@ def _make_heartbeat_mock_db(instance=None, latest_pnl=None):
             chain.filter.return_value.first.return_value = instance
         elif model is PnlRecord:
             chain.filter.return_value.order_by.return_value.first.return_value = latest_pnl
+        elif model is Order:
+            # recompute 查询 Order 时返回空列表（无成交订单 → recompute 返回 None）
+            chain.filter.return_value.filter.return_value.all.return_value = []
         return chain
 
     mock_db.query.side_effect = query_side_effect
@@ -168,8 +174,8 @@ class TestIncrementalFallbackRecompute:
             snapshot = await engine.incremental_update(strategy_instance_id=1, client=None)
 
         assert snapshot is not None
-        # avg_buy_price 不为 0
-        assert snapshot.avg_buy_price == pytest.approx(100.0, rel=1e-9)
+        # avg_buy_price=0：FIFO 配对后所有买单已消耗（1 buy + 1 sell → 0 剩余）
+        assert snapshot.avg_buy_price == pytest.approx(0.0, rel=1e-9)
         # net_position 归零，unrealized 为残差且不会因 avg_buy=0 触发极端值
         assert snapshot.net_position == pytest.approx(0.0, abs=1e-12)
 
@@ -223,8 +229,12 @@ class TestHeartbeatSnapshot:
         mock_db.commit.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_heartbeat_no_latest_returns_none(self):
-        """无最新 PnlRecord 时 heartbeat_snapshot 返回 None（无基准不写心跳）。"""
+    async def test_heartbeat_no_latest_writes_zero(self):
+        """无最新 PnlRecord 且无成交时 heartbeat_snapshot 写一条全零初始心跳。
+
+        修复前：recompute 返回 None 时 heartbeat 也返回 None，不写记录。
+        修复后：用全零默认值写一条心跳，确保盈亏曲线有持续数据点。
+        """
         instance = _make_instance(account_id=1, symbol="BTC-USDT")
         mock_db = _make_heartbeat_mock_db(instance=instance, latest_pnl=None)
 
@@ -232,8 +242,18 @@ class TestHeartbeatSnapshot:
         with patch("services.pnl_accounting_engine.SessionLocal", return_value=mock_db):
             snapshot = await engine.heartbeat_snapshot(strategy_instance_id=1, client=None)
 
-        assert snapshot is None
-        mock_db.add.assert_not_called()
+        assert snapshot is not None
+        assert isinstance(snapshot, PnlSnapshot)
+        # 全零默认值
+        assert snapshot.realized_pnl == pytest.approx(0.0, abs=1e-12)
+        assert snapshot.unrealized_pnl == pytest.approx(0.0, abs=1e-12)
+        assert snapshot.total_pnl == pytest.approx(0.0, abs=1e-12)
+        assert snapshot.net_position == pytest.approx(0.0, abs=1e-12)
+        assert snapshot.avg_buy_price == pytest.approx(0.0, abs=1e-12)
+        assert snapshot.order_count == 0
+        # 写入 PnlRecord 并提交
+        mock_db.add.assert_called_once()
+        mock_db.commit.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_heartbeat_no_instance_returns_none(self):

@@ -1,0 +1,316 @@
+[
+  {
+    "timestamp": "2026-07-11T17:33:31.446375+00:00",
+    "instance_id": 3,
+    "name": "research_grid20_07111730",
+    "symbol": "ETH-USDT-SWAP",
+    "type": "position_mismatch",
+    "details": {
+      "account_id": 1,
+      "symbol": "ETH-USDT-SWAP",
+      "virtual_total": -0.1,
+      "real_total": -1.0,
+      "diff": 0.9,
+      "tolerance": 0.0001,
+      "matched": false
+    },
+    "stop_reasons": [
+      "PnL异常: position_mismatch"
+    ],
+    "snapshot": {
+      "instance_id": 3,
+      "name": "research_grid20_07111730",
+      "symbol": "ETH-USDT-SWAP",
+      "status": "running",
+      "account_id": 1,
+      "template_id": 6,
+      "started_at": "2026-07-11T17:31:15.499219+00:00",
+      "run_days": 0.002,
+      "latest_pnl": {
+        "realized": 0.0,
+        "unrealized": -182.677495,
+        "total": -182.677495,
+        "equity": -365.172495,
+        "net_position": -0.1,
+        "avg_buy_price": 0.0,
+        "recorded_at": "2026-07-11T17:33:09.629371"
+      },
+      "metrics": {
+        "sharpe": 0.0,
+        "max_drawdown": 0.0,
+        "win_rate": 0.0,
+        "profit_loss_ratio": 0.0,
+        "wins": 0,
+        "losses": 0,
+        "total_trades": 0
+      },
+      "risk_events": {},
+      "total_risk_events": 0,
+      "consecutive_errors": 0,
+      "pnl_records_count": 2,
+      "pnl_continuous": true,
+      "orders_count": 21,
+      "reconcile": {
+        "account_id": 1,
+        "symbol": "ETH-USDT-SWAP",
+        "virtual_total": -0.1,
+        "real_total": -1.0,
+        "diff": 0.9,
+        "tolerance": 0.0001,
+        "matched": false
+      },
+      "anomaly": {
+        "type": "position_mismatch",
+        "details": {
+          "account_id": 1,
+          "symbol": "ETH-USDT-SWAP",
+          "virtual_total": -0.1,
+          "real_total": -1.0,
+          "diff": 0.9,
+          "tolerance": 0.0001,
+          "matched": false
+        }
+      },
+      "stop_reasons": [
+        "PnL异常: position_mismatch"
+      ],
+      "params": {
+        "upper_price": 1900,
+        "lower_price": 1700,
+        "grid_count": 20,
+        "order_qty": 1,
+        "symbol": "ETH-USDT-SWAP",
+        "grid_mode": "geometric",
+        "direction": "long",
+        "investment_amount": 100,
+        "lever": 3,
+        "td_mode": "cross",
+        "fee_rate": 0.001
+      }
+    }
+  },
+  {
+    "timestamp": "2026-07-11T17:40:18.653817+00:00",
+    "instance_id": 1,
+    "name": "ceshi",
+    "symbol": "ETH-USDT-SWAP",
+    "type": "pnl_calculation_bug",
+    "root_cause": "PnlAccountingEngine.recompute 使用 _compute_pnl_metrics 计算 unrealized_pnl = total_pnl - realized_pnl，其中 total_pnl = sell_total - buy_total - fee。当仅有买单（无卖单）时，unrealized_pnl = -buy_total - fee，即将全部买入成本视为未实现亏损，严重失真。策略#1 仅1笔买单成交(1819.0×10合约)，unrealized_pnl 错误显示为 -1818.6362。",
+    "fix": "在 recompute 中改用 (current_price - avg_buy_price) * net_position - 预估手续费 计算 unrealized_pnl，与 incremental_update / heartbeat_snapshot 保持一致。修复后 recompute 结果：unrealized=4.1650。",
+    "file_modified": "backend/services/pnl_accounting_engine.py (recompute 方法, 行 96-135)",
+    "old_value": {
+      "unrealized_pnl": -1818.6362,
+      "total_pnl": -1818.6362
+    },
+    "new_value": {
+      "unrealized_pnl": 4.165,
+      "total_pnl": 4.165
+    }
+  },
+  {
+    "timestamp": "2026-07-11T17:40:18.653833+00:00",
+    "instance_id": 3,
+    "name": "research_grid20_07111730",
+    "symbol": "ETH-USDT-SWAP",
+    "type": "reconcile_unit_mismatch_bug",
+    "root_cause": "reconcile_positions 中 real_total 直接使用 OKX API 返回的 pos（合约张数），而 virtual_total 来自 PnlRecord.net_position（币种数量 = actual_qty = sz × ctVal）。ETH-USDT-SWAP ctVal=0.1，策略#3 卖1合约：virtual=-0.1 ETH，real=-1 张，diff=0.9 实为单位不一致导致，非真实仓位偏差。",
+    "fix": "在 reconcile_positions 中通过 instrument_cache 获取 ctVal，将 real_total 乘以 ctVal 转换为币种数量。修复后：virtual=0, real=0, matched=True。",
+    "file_modified": "backend/services/pnl_accounting_engine.py (reconcile_positions 方法, 行 597-609)",
+    "old_value": {
+      "virtual_total": -0.1,
+      "real_total": -1.0,
+      "diff": 0.9,
+      "matched": false
+    },
+    "new_value": {
+      "virtual_total": 0.0,
+      "real_total": 0.0,
+      "diff": 0.0,
+      "matched": true
+    }
+  },
+  {
+    "timestamp": "2026-07-11T20:07:15.743098+00:00",
+    "instance_id": 5,
+    "name": "research_trend_ema_07111738",
+    "symbol": "ETH-USDT-SWAP",
+    "type": "position_mismatch",
+    "details": {
+      "account_id": 1,
+      "symbol": "ETH-USDT-SWAP",
+      "virtual_total": 0.1,
+      "real_total": 0.099,
+      "diff": 0.0010000000000000009,
+      "tolerance": 0.0001,
+      "matched": false
+    },
+    "stop_reasons": [
+      "PnL异常: position_mismatch"
+    ],
+    "snapshot": {
+      "instance_id": 5,
+      "name": "research_trend_ema_07111738",
+      "symbol": "ETH-USDT-SWAP",
+      "status": "running",
+      "account_id": 1,
+      "template_id": 7,
+      "template_type": "trend",
+      "started_at": "2026-07-11T17:38:27.127308+00:00",
+      "run_days": 0.1033,
+      "latest_pnl": {
+        "realized": 0.0,
+        "unrealized": 0.0,
+        "total": 0.0,
+        "equity": 0.0,
+        "net_position": 0.0,
+        "avg_buy_price": 0.0,
+        "recorded_at": "2026-07-11T20:07:12.678750+00:00"
+      },
+      "metrics": {
+        "sharpe": 0.0,
+        "max_drawdown": 0.0,
+        "win_rate": 0.0,
+        "profit_loss_ratio": 0.0,
+        "wins": 0,
+        "losses": 0,
+        "total_trades": 0
+      },
+      "risk_events": {},
+      "total_risk_events": 0,
+      "consecutive_errors": 0,
+      "pnl_records_count": 36,
+      "pnl_continuous": true,
+      "orders_count": 0,
+      "reconcile": {
+        "account_id": 1,
+        "symbol": "ETH-USDT-SWAP",
+        "virtual_total": 0.1,
+        "real_total": 0.099,
+        "diff": 0.0010000000000000009,
+        "tolerance": 0.0001,
+        "matched": false
+      },
+      "anomaly": {
+        "type": "position_mismatch",
+        "details": {
+          "account_id": 1,
+          "symbol": "ETH-USDT-SWAP",
+          "virtual_total": 0.1,
+          "real_total": 0.099,
+          "diff": 0.0010000000000000009,
+          "tolerance": 0.0001,
+          "matched": false
+        }
+      },
+      "stop_reasons": [
+        "PnL异常: position_mismatch"
+      ],
+      "params": {
+        "fast_ma_period": 5,
+        "slow_ma_period": 20,
+        "order_qty": 0.01,
+        "symbol": "ETH-USDT-SWAP",
+        "fast_period": 12,
+        "slow_period": 26,
+        "signal_period": 9,
+        "investment_amount": 500,
+        "lever": 3,
+        "td_mode": "cross",
+        "fee_rate": 0.001
+      }
+    }
+  },
+  {
+    "timestamp": "2026-07-11T20:07:16.032351+00:00",
+    "instance_id": 6,
+    "name": "research_grid50_07111805",
+    "symbol": "ETH-USDT-SWAP",
+    "type": "position_mismatch",
+    "details": {
+      "account_id": 1,
+      "symbol": "ETH-USDT-SWAP",
+      "virtual_total": 0.10000000000000009,
+      "real_total": 0.099,
+      "diff": 0.0010000000000000842,
+      "tolerance": 0.0001,
+      "matched": false
+    },
+    "stop_reasons": [
+      "PnL异常: position_mismatch"
+    ],
+    "snapshot": {
+      "instance_id": 6,
+      "name": "research_grid50_07111805",
+      "symbol": "ETH-USDT-SWAP",
+      "status": "running",
+      "account_id": 1,
+      "template_id": 6,
+      "template_type": "grid",
+      "started_at": "2026-07-11T18:05:59.621926+00:00",
+      "run_days": 0.0842,
+      "latest_pnl": {
+        "realized": 4.373565912183029,
+        "unrealized": -181.7662333407546,
+        "total": -177.39266742857157,
+        "equity": 0.0,
+        "net_position": 0.10000000000000009,
+        "avg_buy_price": 1821.674211502783,
+        "recorded_at": "2026-07-11T20:07:15.746900+00:00"
+      },
+      "metrics": {
+        "sharpe": -3.0159,
+        "max_drawdown": 95.6285,
+        "win_rate": 100.0,
+        "profit_loss_ratio": 0.0,
+        "wins": 9,
+        "losses": 0,
+        "total_trades": 9
+      },
+      "risk_events": {
+        "order_latency": 1
+      },
+      "total_risk_events": 1,
+      "consecutive_errors": 0,
+      "pnl_records_count": 32,
+      "pnl_continuous": true,
+      "orders_count": 21,
+      "reconcile": {
+        "account_id": 1,
+        "symbol": "ETH-USDT-SWAP",
+        "virtual_total": 0.10000000000000009,
+        "real_total": 0.099,
+        "diff": 0.0010000000000000842,
+        "tolerance": 0.0001,
+        "matched": false
+      },
+      "anomaly": {
+        "type": "position_mismatch",
+        "details": {
+          "account_id": 1,
+          "symbol": "ETH-USDT-SWAP",
+          "virtual_total": 0.10000000000000009,
+          "real_total": 0.099,
+          "diff": 0.0010000000000000842,
+          "tolerance": 0.0001,
+          "matched": false
+        }
+      },
+      "stop_reasons": [
+        "PnL异常: position_mismatch"
+      ],
+      "params": {
+        "upper_price": 1900,
+        "lower_price": 1700,
+        "grid_count": 50,
+        "order_qty": 1,
+        "symbol": "ETH-USDT-SWAP",
+        "grid_mode": "geometric",
+        "direction": "long",
+        "investment_amount": 2500,
+        "lever": 3,
+        "td_mode": "cross",
+        "fee_rate": 0.001
+      }
+    }
+  }
+]

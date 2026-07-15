@@ -1,0 +1,287 @@
+{
+  "generated_at": "2026-07-12T14:22:37.349602+00:00",
+  "symbol": "BTC-USDT-SWAP",
+  "scenarios": [
+    {
+      "scenario": "pause_on_high",
+      "result": "TRIGGER_MISMATCH",
+      "triggered_correctly": false,
+      "expected_triggers": [
+        "pause_orders"
+      ],
+      "actual_triggers": []
+    },
+    {
+      "scenario": "resume_on_low",
+      "result": "TRIGGER_MISMATCH",
+      "triggered_correctly": false,
+      "expected_triggers": [
+        "resume_orders"
+      ],
+      "actual_triggers": []
+    },
+    {
+      "scenario": "rebalance_on_threshold",
+      "result": "TRIGGER_MISMATCH",
+      "triggered_correctly": false,
+      "expected_triggers": [
+        "rebalance_position"
+      ],
+      "actual_triggers": []
+    },
+    {
+      "scenario": "compound_rules",
+      "result": "TRIGGER_MISMATCH",
+      "triggered_correctly": false,
+      "expected_triggers": [
+        "pause_orders"
+      ],
+      "actual_triggers": []
+    }
+  ],
+  "results": {
+    "pause_on_high": {
+      "scenario": "pause_on_high",
+      "symbol": "BTC-USDT-SWAP",
+      "started_at": "2026-07-12T14:18:31.720302+00:00",
+      "steps": [
+        {
+          "name": "generate_qsm",
+          "status": "OK",
+          "qsm_name": "strategy_test_pause_on_high"
+        },
+        {
+          "name": "resolve_variables",
+          "status": "OK"
+        },
+        {
+          "name": "dsl_validate",
+          "status": "OK"
+        },
+        {
+          "name": "dsl_dry_run",
+          "status": "OK",
+          "total_ticks": 720
+        },
+        {
+          "name": "create_instance",
+          "status": "OK",
+          "template_id": 26,
+          "instance_id": 22
+        },
+        {
+          "name": "start_strategy",
+          "status": "OK",
+          "instance_id": 22
+        },
+        {
+          "name": "wait_run",
+          "status": "OK",
+          "seconds": 60
+        },
+        {
+          "name": "verify_triggers",
+          "status": "FAIL",
+          "expected": [
+            "pause_orders"
+          ],
+          "actual": []
+        }
+      ],
+      "result": "TRIGGER_MISMATCH",
+      "verify": {
+        "scenario": "pause_on_high",
+        "expected_triggers": [
+          "pause_orders"
+        ],
+        "actual_triggers": [],
+        "triggered_correctly": false,
+        "events": []
+      }
+    },
+    "resume_on_low": {
+      "scenario": "resume_on_low",
+      "symbol": "BTC-USDT-SWAP",
+      "started_at": "2026-07-12T14:19:33.543229+00:00",
+      "steps": [
+        {
+          "name": "generate_qsm",
+          "status": "OK",
+          "qsm_name": "strategy_test_resume_on_low"
+        },
+        {
+          "name": "resolve_variables",
+          "status": "OK"
+        },
+        {
+          "name": "dsl_validate",
+          "status": "OK"
+        },
+        {
+          "name": "dsl_dry_run",
+          "status": "OK",
+          "total_ticks": 720
+        },
+        {
+          "name": "create_instance",
+          "status": "OK",
+          "template_id": 27,
+          "instance_id": 23
+        },
+        {
+          "name": "start_strategy",
+          "status": "OK",
+          "instance_id": 23
+        },
+        {
+          "name": "wait_run",
+          "status": "OK",
+          "seconds": 60
+        },
+        {
+          "name": "verify_triggers",
+          "status": "FAIL",
+          "expected": [
+            "resume_orders"
+          ],
+          "actual": []
+        }
+      ],
+      "result": "TRIGGER_MISMATCH",
+      "verify": {
+        "scenario": "resume_on_low",
+        "expected_triggers": [
+          "resume_orders"
+        ],
+        "actual_triggers": [],
+        "triggered_correctly": false,
+        "events": []
+      }
+    },
+    "rebalance_on_threshold": {
+      "scenario": "rebalance_on_threshold",
+      "symbol": "BTC-USDT-SWAP",
+      "started_at": "2026-07-12T14:20:34.829674+00:00",
+      "steps": [
+        {
+          "name": "generate_qsm",
+          "status": "OK",
+          "qsm_name": "strategy_test_rebalance_on_threshold"
+        },
+        {
+          "name": "resolve_variables",
+          "status": "OK"
+        },
+        {
+          "name": "dsl_validate",
+          "status": "OK"
+        },
+        {
+          "name": "dsl_dry_run",
+          "status": "OK",
+          "total_ticks": 720
+        },
+        {
+          "name": "create_instance",
+          "status": "OK",
+          "template_id": 28,
+          "instance_id": 24
+        },
+        {
+          "name": "start_strategy",
+          "status": "OK",
+          "instance_id": 24
+        },
+        {
+          "name": "wait_run",
+          "status": "OK",
+          "seconds": 60
+        },
+        {
+          "name": "verify_triggers",
+          "status": "FAIL",
+          "expected": [
+            "rebalance_position"
+          ],
+          "actual": []
+        }
+      ],
+      "result": "TRIGGER_MISMATCH",
+      "verify": {
+        "scenario": "rebalance_on_threshold",
+        "expected_triggers": [
+          "rebalance_position"
+        ],
+        "actual_triggers": [],
+        "triggered_correctly": false,
+        "events": []
+      }
+    },
+    "compound_rules": {
+      "scenario": "compound_rules",
+      "symbol": "BTC-USDT-SWAP",
+      "started_at": "2026-07-12T14:21:36.087766+00:00",
+      "steps": [
+        {
+          "name": "generate_qsm",
+          "status": "OK",
+          "qsm_name": "strategy_test_compound_rules"
+        },
+        {
+          "name": "resolve_variables",
+          "status": "OK"
+        },
+        {
+          "name": "dsl_validate",
+          "status": "OK"
+        },
+        {
+          "name": "dsl_dry_run",
+          "status": "OK",
+          "total_ticks": 720
+        },
+        {
+          "name": "create_instance",
+          "status": "OK",
+          "template_id": 29,
+          "instance_id": 25
+        },
+        {
+          "name": "start_strategy",
+          "status": "OK",
+          "instance_id": 25
+        },
+        {
+          "name": "wait_run",
+          "status": "OK",
+          "seconds": 60
+        },
+        {
+          "name": "verify_triggers",
+          "status": "FAIL",
+          "expected": [
+            "pause_orders"
+          ],
+          "actual": []
+        }
+      ],
+      "result": "TRIGGER_MISMATCH",
+      "verify": {
+        "scenario": "compound_rules",
+        "expected_triggers": [
+          "pause_orders"
+        ],
+        "actual_triggers": [],
+        "triggered_correctly": false,
+        "events": []
+      }
+    }
+  },
+  "summary": {
+    "pause_on_high": "TRIGGER_MISMATCH",
+    "resume_on_low": "TRIGGER_MISMATCH",
+    "rebalance_on_threshold": "TRIGGER_MISMATCH",
+    "compound_rules": "TRIGGER_MISMATCH"
+  },
+  "overall_passed": false
+}

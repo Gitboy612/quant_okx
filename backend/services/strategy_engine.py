@@ -122,10 +122,14 @@ class StrategyEngine:
             self._pnl_sampling_task = asyncio.create_task(self._pnl_sampling_loop())
 
     async def _pnl_sampling_loop(self):
-        """PnL 采样循环：每 60s 对 running 策略执行增量核算，无成交时每 5 分钟写心跳快照。"""
+        """PnL 采样循环：每 15s 对 running 策略执行增量核算，无成交时每 15s 写心跳快照。
+
+        心跳间隔 15 秒，使盈亏曲线在约 75 分钟内累积 300+ 数据点。
+        无成交时也写心跳记录，确保策略运行期间盈亏曲线有持续数据点。
+        """
         while True:
             try:
-                await asyncio.sleep(60)
+                await asyncio.sleep(15)
                 running_ids = self.get_running_ids()
                 import time
                 now_ts = time.time()
@@ -137,9 +141,9 @@ class StrategyEngine:
                             # 有成交增量，重置心跳计时器
                             self._last_heartbeat_ts[sid] = now_ts
                         else:
-                            # 无成交，检查是否需要心跳快照（≥5分钟）
+                            # 无成交，检查是否需要心跳快照（≥15秒）
                             last_hb = self._last_heartbeat_ts.get(sid, 0)
-                            if now_ts - last_hb >= 300:  # 5分钟
+                            if now_ts - last_hb >= 15:  # 15秒，确保盈亏曲线数据点密集
                                 await pnl_accounting_engine.heartbeat_snapshot(sid, client)
                                 self._last_heartbeat_ts[sid] = now_ts
                     except Exception as e:
@@ -269,12 +273,37 @@ class StrategyEngine:
                 current_price = float(tickers[0]["last"])
 
                 if strategy_type == "grid":
-                    upper = params.get("upper_price", 0)
-                    lower = params.get("lower_price", 0)
-                    grid_count = params.get("grid_count", 0)
-                    order_qty = params.get("order_qty", 0)
+                    # 防御性类型转换：JSON 字段可能存储为字符串（用户输入或历史数据）
+                    try:
+                        upper = float(params.get("upper_price", 0))
+                        lower = float(params.get("lower_price", 0))
+                        grid_count = int(params.get("grid_count", 0))
+                        order_qty = float(params.get("order_qty", 0))
+                    except (TypeError, ValueError) as e:
+                        return {"ok": False, "reason": f"参数类型无效: {e}"}
                     if upper <= lower or grid_count < 2 or order_qty <= 0:
                         return {"ok": False, "reason": "参数无效（上限>下限，网格数≥2，交易量>0）"}
+
+                    # 自动校正：当前价不在网格区间内，或偏离中心超过 5% 时，以当前价为中心重算上下轨
+                    grid_center = (upper + lower) / 2
+                    deviation = abs(current_price - grid_center) / grid_center if grid_center > 0 else 1
+                    grid_recalibrated = False
+                    if current_price < lower or current_price > upper or deviation > 0.05:
+                        # 以当前价为中心，保持原网格宽度，重算上下轨
+                        grid_width = upper - lower
+                        new_lower = round(current_price - grid_width / 2, 2 if "-SWAP" not in symbol else 1)
+                        new_upper = round(current_price + grid_width / 2, 2 if "-SWAP" not in symbol else 1)
+                        params["upper_price"] = new_upper
+                        params["lower_price"] = new_lower
+                        instance.params = params
+                        db.commit()
+                        upper, lower = new_upper, new_lower
+                        grid_recalibrated = True
+                        logger.info(
+                            "策略#%s 网格自动校正: 中心价 %s → %s, [%s, %s]",
+                            instance_id, grid_center, current_price, lower, upper,
+                        )
+
                     step = (upper - lower) / (grid_count - 1)
                     grids_below = sum(1 for i in range(grid_count) if (lower + i * step) <= current_price)
                     required_min = round(order_qty * grids_below * lower, 2)
@@ -289,11 +318,15 @@ class StrategyEngine:
                         "grids_below_price": grids_below,
                         "required_usdt_min": required_min,
                         "available_usdt": available_usdt,
+                        "grid_recalibrated": grid_recalibrated,
                         "reason": f"当前价{current_price}在[{lower}-{upper}]中，下方{grids_below}格需≈${required_min} USDT（买币+挂卖单），可用${available_usdt} USDT",
                     }
 
                 elif strategy_type in ("trend", "advanced_grid_hedge"):
-                    order_qty = params.get("order_qty", 0)
+                    try:
+                        order_qty = float(params.get("order_qty", 0))
+                    except (TypeError, ValueError):
+                        return {"ok": False, "reason": "交易量参数类型无效"}
                     if order_qty <= 0:
                         return {"ok": False, "reason": "交易量必须大于0"}
                     if "-SWAP" in symbol:

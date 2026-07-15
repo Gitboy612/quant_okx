@@ -100,3 +100,51 @@ class AccountAPI:
         path = "/api/v5/account/trade-fee" + _build_query(params)
         resp = await self._client._request("GET", path, is_private=True)
         return resp.get("data", [])
+
+    async def get_position_risk(self, inst_id: str) -> dict | None:
+        """查询持仓风险信息（保证金占用率与强平价）。
+
+        通过 GET /api/v5/account/positions 按 instId 过滤，提取保证金、强平价、
+        持仓量与方向。保证金占用率无直接字段，用 margin / (|pos| × markPx) 估算；
+        若 markPx 缺失或 pos 为 0 导致无法估算，margin_ratio 回退为 margin 原值（float）。
+
+        Args:
+            inst_id: 合约ID 如 ETH-USDT-SWAP
+        Returns:
+            {"margin_ratio": float, "liq_px": float, "margin": str, "pos": str, "pos_side": str}
+            无持仓返回 None
+        """
+        params = {"instType": None, "instId": inst_id}
+        path = "/api/v5/account/positions" + _build_query(params)
+        resp = await self._client._request("GET", path, is_private=True)
+        data = resp.get("data", [])
+        if not data:
+            return None
+        pos_info = data[0]
+        pos = pos_info.get("pos", "0")
+        margin = pos_info.get("margin", "0")
+        liq_px = pos_info.get("liqPx", "")
+        mark_px = pos_info.get("markPx", "")
+        pos_side = pos_info.get("posSide", "")
+        # 估算保证金占用率：margin / (|pos| × markPx)
+        try:
+            pos_f = abs(float(pos))
+            margin_f = float(margin) if margin else 0.0
+            mark_f = float(mark_px) if mark_px else 0.0
+            if pos_f > 0 and mark_f > 0:
+                margin_ratio = margin_f / (pos_f * mark_f)
+            else:
+                margin_ratio = margin_f
+        except (ValueError, TypeError):
+            margin_ratio = 0.0
+        try:
+            liq_px_f = float(liq_px) if liq_px else None
+        except (ValueError, TypeError):
+            liq_px_f = None
+        return {
+            "margin_ratio": margin_ratio,
+            "liq_px": liq_px_f,
+            "margin": margin,
+            "pos": pos,
+            "pos_side": pos_side,
+        }

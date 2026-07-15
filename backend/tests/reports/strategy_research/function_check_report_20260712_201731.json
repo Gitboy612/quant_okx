@@ -1,0 +1,127 @@
+{
+  "check_type": "scheduled_function_check",
+  "started_at": "2026-07-12T20:17:31.370877+00:00",
+  "version": "1.0",
+  "checks": {
+    "theoretical_vs_actual_orders": {
+      "check": "theoretical_vs_actual_orders",
+      "passed": true,
+      "per_strategy": [
+        {
+          "strategy_instance_id": 2,
+          "symbol": "ETH-USDT-SWAP",
+          "current_price": 1817.8,
+          "grid_levels": [
+            1790.8,
+            1793.8,
+            1796.8,
+            1799.8,
+            1802.8,
+            1805.8,
+            1808.8,
+            1811.8,
+            1814.8,
+            1817.8,
+            1820.8,
+            1823.8,
+            1826.8,
+            1829.8,
+            1832.8,
+            1835.8,
+            1838.8,
+            1841.8,
+            1844.8,
+            1847.8,
+            1850.8
+          ],
+          "actual_live_orders": 85,
+          "missing_levels": [
+            1817.8
+          ],
+          "missing_ratio": 0.048,
+          "price_mismatches": [],
+          "matched": true
+        },
+        {
+          "strategy_instance_id": 3,
+          "symbol": "BTC-USDT",
+          "current_price": 64213.9,
+          "grid_levels": [
+            63498.9,
+            63563.9,
+            63628.9,
+            63693.9,
+            63758.9,
+            63823.9,
+            63888.9,
+            63953.9,
+            64018.9,
+            64083.9,
+            64148.9,
+            64213.9,
+            64278.9,
+            64343.9,
+            64408.9,
+            64473.9,
+            64538.9,
+            64603.9,
+            64668.9,
+            64733.9,
+            64798.9
+          ],
+          "actual_live_orders": 84,
+          "missing_levels": [
+            64213.9
+          ],
+          "missing_ratio": 0.048,
+          "price_mismatches": [],
+          "matched": true
+        }
+      ]
+    },
+    "strategy_errors": {
+      "check": "strategy_errors",
+      "passed": true,
+      "error_count": 0,
+      "errors_by_type": [],
+      "recent_errors": []
+    },
+    "actual_pnl": {
+      "check": "actual_pnl",
+      "passed": false,
+      "per_strategy": [
+        {
+          "strategy_instance_id": 2,
+          "symbol": "ETH-USDT-SWAP",
+          "okx_realized_pnl": 3.026606,
+          "db_realized_pnl": 0.242603,
+          "diff": 2.784003,
+          "matched": false,
+          "trade_count": 104,
+          "fills_coverage": 1.0,
+          "okx_fills_count": 223,
+          "db_filled_count": 223
+        },
+        {
+          "strategy_instance_id": 3,
+          "symbol": "BTC-USDT",
+          "okx_realized_pnl": 8.837598,
+          "db_realized_pnl": 5.406383,
+          "diff": 3.431215,
+          "matched": false,
+          "trade_count": 524,
+          "fills_coverage": 1.0,
+          "okx_fills_count": 751,
+          "db_filled_count": 751
+        }
+      ],
+      "total_okx_pnl": 11.864204,
+      "total_db_pnl": 5.648986,
+      "total_diff": 6.215218,
+      "tolerance": 0.5
+    }
+  },
+  "finished_at": "2026-07-12T20:17:47.255103+00:00",
+  "duration_seconds": 15.884,
+  "overall_passed": false
+}

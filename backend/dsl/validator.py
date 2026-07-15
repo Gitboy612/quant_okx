@@ -267,15 +267,19 @@ class DSLValidator:
                             f"{path}.args.indicator",
                         )
         elif input_type == "bool":
-            # 逻辑组合期望 args.conditions（列表）或 args.condition（单个）为子条件引用
-            has_conditions = isinstance(args.get("conditions"), list)
-            has_condition = isinstance(args.get("condition"), dict)
-            if not (has_conditions or has_condition):
-                self.result.add_error(
-                    "type", "TYPE_MISMATCH",
-                    f"逻辑组合条件 {cond.kind} 期望 args.conditions 或 args.condition 为子条件引用",
-                    f"{path}.args",
-                )
+            # 仅逻辑组合条件（and/or/not 等）期望 args.conditions（列表）或 args.condition（单个）
+            # 普通 bool 条件（cross_above/cross_below/in_range/out_range）有自己的参数 schema，跳过此检查
+            param_schema = getattr(cls, "param_schema", {}) or {}
+            is_logic_combinator = "conditions" in param_schema or "condition" in param_schema
+            if is_logic_combinator:
+                has_conditions = isinstance(args.get("conditions"), list)
+                has_condition = isinstance(args.get("condition"), dict)
+                if not (has_conditions or has_condition):
+                    self.result.add_error(
+                        "type", "TYPE_MISMATCH",
+                        f"逻辑组合条件 {cond.kind} 期望 args.conditions 或 args.condition 为子条件引用",
+                        f"{path}.args",
+                    )
 
         # 递归校验嵌套子条件
         self._recurse_condition_type(cond, path)
