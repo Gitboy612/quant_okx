@@ -7,7 +7,7 @@ import Dropdown from '../Dropdown'
 import OrderQtyInput, { type SzFields } from '../OrderQtyInput'
 import NumberInput from './NumberInput'
 import EventViewerModal from './EventViewerModal'
-import type { StrategyInstance, StrategyEvent, ParamSchemaField } from '../../types'
+import type { StrategyInstance, StrategyEvent } from '../../types'
 import type { RenderParamField } from '../../types/strategies'
 
 interface StrategyListSectionProps {
@@ -20,7 +20,7 @@ interface StrategyListSectionProps {
   instanceEvents: Record<number, StrategyEvent[]>
   feasibilityMsg: string | null
   setFeasibilityMsg: (msg: string | null) => void
-  getInstanceSchema: (inst: StrategyInstance) => Record<string, ParamSchemaField> | Record<string, RenderParamField>
+  getInstanceSchema: (inst: StrategyInstance) => Record<string, RenderParamField>
   handleStart: (id: number) => void
   handlePause: (id: number) => void
   handleResume: (id: number) => void
@@ -154,6 +154,7 @@ export default function StrategyListSection({
                           const hint = field?.hint ?? ''
                           const isOrderQtyField = key === 'order_qty' || key === 'sz'
                           const useOrderQty = isOrderQtyField && isContractPair(inst.symbol)
+                          const isNumericField = ['number', 'int', 'integer', 'float'].includes(field?.type ?? '')
                           return (
                             <div key={key} className={useOrderQty ? 'col-span-2' : ''}>
                               <label className="text-xs text-[#6B6B7B]" title={hint}>
@@ -175,7 +176,7 @@ export default function StrategyListSection({
                                   }}
                                   className="mt-1 w-full"
                                 />
-                              ) : useOrderQty && (field?.type === 'number' || field?.type === 'int' || field?.type === 'float') ? (
+                              ) : useOrderQty && isNumericField ? (
                                 <OrderQtyInput
                                   symbol={inst.symbol}
                                   value={typeof value === 'number' ? value : undefined}
@@ -194,7 +195,7 @@ export default function StrategyListSection({
                                   max={field?.max}
                                   className="mt-1"
                                 />
-                              ) : field?.type === 'number' ? (
+                              ) : isNumericField ? (
                                 <NumberInput
                                   value={typeof value === 'number' ? value : undefined}
                                   onChange={(v) => {

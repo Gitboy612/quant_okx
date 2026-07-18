@@ -15,7 +15,7 @@ import {
 import { listAccounts } from '../api/accounts'
 import { getStrategyEvents } from '../api/monitoring'
 import { isContractPair, INST_ID_LABEL } from '../utils/instId'
-import type { StrategyInstance, StrategyTemplate, Account, ParamSchemaField, StrategyEvent } from '../types'
+import type { StrategyInstance, StrategyTemplate, Account, StrategyEvent } from '../types'
 import type { RenderParamField } from '../types/strategies'
 
 export function useStrategiesState() {
@@ -309,7 +309,7 @@ export function useStrategiesState() {
     const tpl = templates.find((t) => t.id === inst.template_id)
     const ps = tpl?.param_schema
     if (ps && Object.keys(ps).length > 0) {
-      return ps as Record<string, ParamSchemaField>
+      return ps as Record<string, RenderParamField>
     }
     // QS-Model 模板：从 qs_model_config.params 动态构建 schema
     const qsParams = tpl?.qs_model_config?.params

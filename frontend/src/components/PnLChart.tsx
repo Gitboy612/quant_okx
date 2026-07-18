@@ -84,12 +84,13 @@ function PnLChart({ data }: PnLChartProps) {
             boxShadow: '0 0 20px rgba(0, 212, 170, 0.1), 0 8px 24px rgba(0, 0, 0, 0.4)',
           }}
           labelStyle={{ color: '#7B86A2', fontWeight: 500 }}
-          labelFormatter={(label: string) => formatXTick(label)}
-          formatter={(value: number, _name: string, entry: any) => {
-            const realized = entry?.payload?.realized_pnl ?? 0
-            const unrealized = entry?.payload?.unrealized_pnl ?? 0
+          labelFormatter={(label) => formatXTick(String(label ?? ''))}
+          formatter={(value, _name, entry) => {
+            const numericValue = Number(Array.isArray(value) ? value[0] : (value ?? 0))
+            const realized = Number(entry?.payload?.realized_pnl ?? 0)
+            const unrealized = Number(entry?.payload?.unrealized_pnl ?? 0)
             return [
-              `${formatPnl(value)} | 实现 $${realized.toFixed(2)} | 浮动 $${unrealized.toFixed(2)}`,
+              `${formatPnl(numericValue)} | 实现 $${realized.toFixed(2)} | 浮动 $${unrealized.toFixed(2)}`,
               ''
             ]
           }}

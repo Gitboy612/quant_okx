@@ -30,7 +30,7 @@ interface InstanceFormModalProps {
   setSymbolSearch: (v: string) => void
   showSymbolDropdown: boolean
   setShowSymbolDropdown: (v: boolean) => void
-  symbolDropdownRef: RefObject<HTMLDivElement>
+  symbolDropdownRef: RefObject<HTMLDivElement | null>
   filteredSymbols: string[]
   contractSymbols: string[]
   spotSymbols: string[]
