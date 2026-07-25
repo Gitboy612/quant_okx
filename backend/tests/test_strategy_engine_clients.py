@@ -112,6 +112,41 @@ async def test_check_feasibility_closes_client(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_check_feasibility_rejects_swap_in_simple_account_mode(monkeypatch):
+    """简单模式（acctLv=1）不支持永续合约，应在启动前给出明确原因。"""
+    engine = StrategyEngine()
+
+    account = _make_account(1)
+    instance = MagicMock(spec=StrategyInstance)
+    instance.id = 7
+    instance.params = {
+        "symbol": "BTC-USDT-SWAP",
+        "order_qty": 0.01,
+    }
+    template = MagicMock(spec=StrategyTemplate)
+    template.strategy_type = "trend"
+
+    db = _mock_db({StrategyInstance: instance, StrategyTemplate: template, Account: account})
+    monkeypatch.setattr("services.strategy_engine.SessionLocal", lambda: db)
+
+    client = MagicMock()
+    client.account.get_config = AsyncMock(
+        return_value=[{"acctLv": "1", "posMode": "net_mode"}]
+    )
+    client.get_ticker = AsyncMock()
+    client.aclose = AsyncMock()
+    monkeypatch.setattr("services.strategy_engine.OKXClient", MagicMock(return_value=client))
+
+    result = await engine.check_feasibility(7)
+
+    assert result["ok"] is False
+    assert result["account_level"] == "1"
+    assert "简单模式" in result["reason"]
+    client.get_ticker.assert_not_awaited()
+    client.aclose.assert_awaited()
+
+
+@pytest.mark.asyncio
 async def test_check_feasibility_closes_client_on_exception(monkeypatch):
     """check_feasibility 中途异常时 finally 仍关闭 client。"""
     engine = StrategyEngine()

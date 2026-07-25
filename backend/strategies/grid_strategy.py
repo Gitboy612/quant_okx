@@ -340,6 +340,12 @@ class GridStrategy(BaseStrategy):
 
     async def _place_grid_orders(self, symbol: str, current_price: float,
                                 grid_levels: list[float] | None = None):
+        """在生命周期锁内放置网格订单，避免与暂停/停止撤单交叉执行。"""
+        async with self._order_operation_lock:
+            await self._place_grid_orders_unlocked(symbol, current_price, grid_levels)
+
+    async def _place_grid_orders_unlocked(self, symbol: str, current_price: float,
+                                         grid_levels: list[float] | None = None):
         """批量下网格订单（SubTask 8.3 提取自 execute）。
 
         根据 current_price 划分买单（level <= price）和卖单（level > price），

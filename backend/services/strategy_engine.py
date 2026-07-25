@@ -70,6 +70,56 @@ class StrategyEngine:
             return strategy.client
         return None
 
+    def _get_live_task_entry(self, instance_id: int):
+        """返回仍在执行的策略任务；完成的旧任务会立即从内存注册表移除。"""
+        entry = self._tasks.get(instance_id)
+        if entry is None:
+            return None
+        task, _ = entry
+        if task.done():
+            # done callback 通常会在下一轮事件循环执行；这里可能更早被接口调用，
+            # 因此直接复用完成处理，避免先 pop 后让 callback 无法回写数据库。
+            self._on_strategy_task_done(instance_id, task)
+            return None
+        return entry
+
+    def _on_strategy_task_done(self, instance_id: int, task: asyncio.Task):
+        """执行任务结束时清理注册表，并修正仍显示为运行中的数据库状态。"""
+        entry = self._tasks.get(instance_id)
+        if entry is None or entry[0] is not task:
+            return
+
+        self._tasks.pop(instance_id, None)
+        self._last_heartbeat_ts.pop(instance_id, None)
+        if task.cancelled():
+            return
+
+        try:
+            error = task.exception()
+        except asyncio.CancelledError:
+            return
+
+        db = SessionLocal()
+        try:
+            instance = db.query(StrategyInstance).filter(
+                StrategyInstance.id == instance_id
+            ).first()
+            if instance and instance.status in ("running", "paused"):
+                instance.status = "error" if error else "stopped"
+                if error is None:
+                    instance.stopped_at = datetime.now(timezone.utc)
+                db.commit()
+        finally:
+            db.close()
+
+        if error:
+            logger.error(
+                "Strategy task %s exited unexpectedly: %s",
+                instance_id,
+                error,
+                exc_info=(type(error), error, error.__traceback__),
+            )
+
     async def get_shared_balance(self, account_id: int | str) -> dict:
         """获取同账户共享的余额缓存，5 秒内复用。
 
@@ -266,6 +316,22 @@ class StrategyEngine:
                 symbol = params.get("symbol", "")
                 strategy_type = template.strategy_type
 
+                if "-SWAP" in symbol and strategy_type in ("trend", "advanced_grid_hedge"):
+                    account_configs = await client.account.get_config()
+                    account_config = account_configs[0] if account_configs else {}
+                    account_level = str(account_config.get("acctLv", ""))
+                    if account_level == "1":
+                        return {
+                            "ok": False,
+                            "account_level": account_level,
+                            "position_mode": account_config.get("posMode", ""),
+                            "reason": (
+                                "当前 OKX 账户为简单模式（acctLv=1），不支持永续合约交易；"
+                                "请先在 OKX 模拟盘将账户模式切换为单币种保证金、"
+                                "跨币种保证金或组合保证金模式"
+                            ),
+                        }
+
                 tickers = await client.get_ticker(symbol)
                 if not tickers:
                     return {"ok": False, "reason": f"无法获取 {symbol} 行情数据，请检查交易对是否存在"}
@@ -359,20 +425,24 @@ class StrategyEngine:
         return 0.0
 
     async def start_strategy(self, instance_id: int):
+        existing = self._get_live_task_entry(instance_id)
+        if existing is not None:
+            raise HTTPException(status_code=409, detail="策略运行任务已存在")
+
         db = SessionLocal()
         try:
             instance = db.query(StrategyInstance).filter(StrategyInstance.id == instance_id).first()
             if not instance:
-                return
+                raise HTTPException(status_code=404, detail="策略实例不存在")
 
             template = db.query(StrategyTemplate).filter(StrategyTemplate.id == instance.template_id).first()
             account = db.query(Account).filter(Account.id == instance.account_id).first()
             if not template or not account:
-                return
+                raise HTTPException(status_code=400, detail="策略模板或账户不存在")
 
             strategy_cls = self._strategy_map.get(template.strategy_type)
             if not strategy_cls:
-                return
+                raise HTTPException(status_code=400, detail="不支持的策略类型")
 
             from services.encryption_service import decrypt
 
@@ -425,6 +495,11 @@ class StrategyEngine:
 
             task = asyncio.create_task(strategy.execute())
             self._tasks[instance_id] = (task, strategy)
+            task.add_done_callback(
+                lambda completed_task: self._on_strategy_task_done(
+                    instance_id, completed_task
+                )
+            )
 
             # 启动 PnL 采样后台任务（若尚未运行）
             self.start_pnl_sampling()
@@ -433,16 +508,20 @@ class StrategyEngine:
             db.close()
 
     async def pause_strategy(self, instance_id: int):
-        entry = self._tasks.get(instance_id)
-        if entry:
-            strategy = entry[1]
-            # 暂停前先增量核算，确保最近成交被记录
-            try:
-                await pnl_accounting_engine.incremental_update(instance_id, strategy.client)
-            except Exception as e:
-                logger.error(f"pause_strategy incremental_update error for {instance_id}: {e}")
-            strategy.pause()
-        # Always update DB status, even if task not in memory (server restart)
+        entry = self._get_live_task_entry(instance_id)
+        if entry is None:
+            raise HTTPException(status_code=409, detail="策略运行任务不存在，无法暂停")
+
+        strategy = entry[1]
+        # 暂停前先增量核算，确保最近成交被记录
+        try:
+            await pnl_accounting_engine.incremental_update(instance_id, strategy.client)
+        except Exception as e:
+            logger.error(f"pause_strategy incremental_update error for {instance_id}: {e}")
+        cleanup_task = strategy.pause()
+        if isinstance(cleanup_task, asyncio.Future):
+            await cleanup_task
+
         db = SessionLocal()
         try:
             instance = db.query(StrategyInstance).filter(StrategyInstance.id == instance_id).first()
@@ -453,9 +532,11 @@ class StrategyEngine:
             db.close()
 
     async def resume_strategy(self, instance_id: int):
-        entry = self._tasks.get(instance_id)
-        if entry:
-            entry[1].resume()
+        entry = self._get_live_task_entry(instance_id)
+        if entry is None:
+            raise HTTPException(status_code=409, detail="策略运行任务不存在，无法恢复")
+
+        entry[1].resume()
         db = SessionLocal()
         try:
             instance = db.query(StrategyInstance).filter(StrategyInstance.id == instance_id).first()
@@ -474,12 +555,14 @@ class StrategyEngine:
                 await pnl_accounting_engine.incremental_update(instance_id, strategy.client)
             except Exception as e:
                 logger.error(f"stop_strategy incremental_update error for {instance_id}: {e}")
-            strategy.stop()
+            cleanup_task = strategy.stop()
+            if isinstance(cleanup_task, asyncio.Future):
+                await cleanup_task
             # Disconnect WebSocket
             if strategy.ws_client:
                 await strategy.ws_client.disconnect()
             task.cancel()
-            del self._tasks[instance_id]
+            self._tasks.pop(instance_id, None)
         # Always update DB status, even if task not in memory
         db = SessionLocal()
         try:
@@ -569,12 +652,25 @@ class StrategyEngine:
                     name="趋势跟随",
                     strategy_type="trend",
                     description="基于双均线交叉信号判断趋势方向，顺势开仓",
-                    default_params={"fast_ma_period": 5, "slow_ma_period": 20, "order_qty": 0.01, "symbol": "BTC-USDT-SWAP"},
+                    default_params={
+                        "fast_ma_period": 5,
+                        "slow_ma_period": 20,
+                        "order_qty": 0.01,
+                        "symbol": "BTC-USDT-SWAP",
+                        "bar": "5m",
+                        "poll_interval": 60,
+                        "enter_on_start": False,
+                        "closed_candle_only": True,
+                    },
                     param_schema={
                         "fast_ma_period": {"label": "快线周期", "type": "number", "default": 5, "min": 2, "max": 50, "step": 1, "hint": "快速均线计算周期，越小越灵敏"},
                         "slow_ma_period": {"label": "慢线周期", "type": "number", "default": 20, "min": 5, "max": 200, "step": 1, "hint": "慢速均线计算周期，越大越稳定"},
                         "order_qty": {"label": "单笔交易量", "type": "number", "default": 0.01, "min": 0.0001, "step": 0.001, "hint": "每次信号触发时的交易数量"},
                         "symbol": {"label": "交易对", "type": "select", "default": "BTC-USDT-SWAP", "options": ["BTC-USDT-SWAP", "ETH-USDT-SWAP", "SOL-USDT-SWAP"]},
+                        "bar": {"label": "K线周期", "type": "select", "default": "5m", "options": ["1m", "3m", "5m", "15m", "30m", "1H"], "hint": "周期越短，信号通常越频繁，噪声也越多"},
+                        "poll_interval": {"label": "行情轮询间隔（秒）", "type": "number", "default": 60, "min": 5, "max": 300, "step": 5, "hint": "只处理新的已完成K线；轮询越快越及时"},
+                        "enter_on_start": {"label": "启动时按当前趋势入场", "type": "boolean", "default": False, "hint": "无虚拟持仓时，启动后不等待下一次均线交叉，直接按当前均线方向下单一次"},
+                        "closed_candle_only": {"label": "仅使用已完成K线", "type": "boolean", "default": True, "hint": "避免未收盘K线反复变化导致虚假信号"},
                     },
                     is_builtin=True,
                 ),

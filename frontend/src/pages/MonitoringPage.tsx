@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useMemo, useState, useRef } from 'react'
 import { motion } from 'framer-motion'
 import {
   Play,
@@ -24,6 +24,7 @@ import { formatInstId } from '../utils/instId'
 import Dropdown from '../components/Dropdown'
 import { TableSkeleton } from '../components/Skeleton'
 import StatusBadge from '../components/StatusBadge'
+import { useSelectedAccount } from '../hooks/useSelectedAccount'
 import type { StrategyInstance, StrategyEvent } from '../types'
 
 const EVENT_ICONS: Record<string, { icon: typeof Play; color: string; label: string }> = {
@@ -69,6 +70,7 @@ const getHedgeGroupColor = (groupId: string | null) => {
 }
 
 export default function MonitoringPage() {
+  const { selectedAccountId } = useSelectedAccount()
   const [instances, setInstances] = useState<StrategyInstance[]>([])
   const [instancesLoading, setInstancesLoading] = useState(true)
   const [selectedInstanceId, setSelectedInstanceId] = useState<number | null>(null)
@@ -80,26 +82,75 @@ export default function MonitoringPage() {
   const [reconcileResults, setReconcileResults] = useState<ReconcileResult[]>([])
   const [health, setHealth] = useState<HealthMetrics | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const scopedInstances = useMemo(
+    () => (
+      selectedAccountId === null
+        ? instances
+        : instances.filter((instance) => instance.account_id === selectedAccountId)
+    ),
+    [instances, selectedAccountId],
+  )
+  const activeInstances = useMemo(
+    () => scopedInstances.filter(
+      (instance) => instance.status === 'running' || instance.status === 'paused',
+    ),
+    [scopedInstances],
+  )
 
   useEffect(() => {
-    listInstances().then((res) => setInstances(res.data)).catch(() => {}).finally(() => setInstancesLoading(false))
+    let mounted = true
+    const refreshInstances = () => {
+      listInstances()
+        .then((res) => {
+          if (mounted) setInstances(res.data)
+        })
+        .catch(() => {})
+        .finally(() => {
+          if (mounted) setInstancesLoading(false)
+        })
+    }
+
+    refreshInstances()
+    // 事件刷新不能替代实例状态刷新；管理页或后端任务都可能改变状态。
+    const instancePollId = setInterval(refreshInstances, 5000)
+    const refreshOnFocus = () => refreshInstances()
+    const refreshOnVisible = () => {
+      if (document.visibilityState === 'visible') refreshInstances()
+    }
+    window.addEventListener('focus', refreshOnFocus)
+    document.addEventListener('visibilitychange', refreshOnVisible)
+
+    return () => {
+      mounted = false
+      clearInterval(instancePollId)
+      window.removeEventListener('focus', refreshOnFocus)
+      document.removeEventListener('visibilitychange', refreshOnVisible)
+    }
   }, [])
 
   // 平仓能力检测：从 instances 提取所有 account_id，拉取冲突列表（Task 7: 代数和算法）
   useEffect(() => {
-    if (instancesLoading || instances.length === 0) return
-    const accountIds = [...new Set(instances.map((i) => i.account_id))]
+    if (instancesLoading) return
+    if (scopedInstances.length === 0) {
+      setConflicts([])
+      return
+    }
+    const accountIds = [...new Set(scopedInstances.map((i) => i.account_id))]
     Promise.all(accountIds.map((aid) => getPositionConflicts(aid).then((res) => res.data.conflicts).catch(() => [])))
       .then((results) => setConflicts(results.flat()))
       .catch(() => {})
-  }, [instances, instancesLoading])
+  }, [scopedInstances, instancesLoading])
 
   // 仓位隔离对账：按 (account_id, symbol) 拉取 reconcile 结果（Task 7）
   useEffect(() => {
-    if (instancesLoading || instances.length === 0) return
+    if (instancesLoading) return
+    if (activeInstances.length === 0) {
+      setReconcileResults([])
+      return
+    }
     // 去重 (account_id, symbol) 组合
     const pairs = new Map<string, { accountId: number; symbol: string }>()
-    for (const inst of instances) {
+    for (const inst of activeInstances) {
       const key = `${inst.account_id}:${inst.symbol}`
       if (!pairs.has(key)) pairs.set(key, { accountId: inst.account_id, symbol: inst.symbol })
     }
@@ -110,12 +161,16 @@ export default function MonitoringPage() {
     )
       .then((results) => setReconcileResults(results.filter((r): r is ReconcileResult => r !== null)))
       .catch(() => {})
-  }, [instances, instancesLoading])
+  }, [activeInstances, instancesLoading])
 
   // 健康指标看板：按 account_id 拉取延迟/资金/保证金/隔离指标（Task 12）
   useEffect(() => {
-    if (instancesLoading || instances.length === 0) return
-    const accountIds = [...new Set(instances.map((i) => i.account_id))]
+    if (instancesLoading) return
+    if (scopedInstances.length === 0) {
+      setHealth(null)
+      return
+    }
+    const accountIds = [...new Set(scopedInstances.map((i) => i.account_id))]
     Promise.all(accountIds.map((aid) => getHealthMetrics(aid).then((res) => res.data).catch(() => null)))
       .then((results) => {
         const valid = results.filter((r): r is HealthMetrics => r !== null)
@@ -125,7 +180,7 @@ export default function MonitoringPage() {
         })
       })
       .catch(() => {})
-  }, [instances, instancesLoading])
+  }, [scopedInstances, instancesLoading])
 
   useEffect(() => {
     if (pollRef.current) {
@@ -140,6 +195,16 @@ export default function MonitoringPage() {
       if (pollRef.current) clearInterval(pollRef.current)
     }
   }, [selectedInstanceId])
+
+  useEffect(() => {
+    if (
+      selectedInstanceId !== null
+      && !scopedInstances.some((instance) => instance.id === selectedInstanceId)
+    ) {
+      setSelectedInstanceId(null)
+      setEvents([])
+    }
+  }, [scopedInstances, selectedInstanceId])
 
   const loadEvents = () => {
     if (selectedInstanceId === null) return
@@ -186,8 +251,8 @@ export default function MonitoringPage() {
       second: '2-digit',
     })
 
-  const runningInstances = instances.filter((i) => i.status === 'running' || i.status === 'paused')
-  const nonRunningInstances = instances.filter((i) => i.status !== 'running' && i.status !== 'paused')
+  const runningInstances = scopedInstances.filter((i) => i.status === 'running' || i.status === 'paused')
+  const nonRunningInstances = scopedInstances.filter((i) => i.status !== 'running' && i.status !== 'paused')
   const instanceOptions = [
     { value: '', label: '-- 请选择策略 --' },
     ...runningInstances.map((inst) => ({ value: inst.id, label: `${inst.name} (${formatInstId(inst.symbol)})` })),
@@ -387,7 +452,7 @@ export default function MonitoringPage() {
                     {s.isolation!.diff.toFixed(4)}
                   </span>
                   <span className="w-24 flex justify-center">
-                    {isConflict ? <StatusBadge status="conflict" /> : <StatusBadge status="running" />}
+                    {isConflict ? <StatusBadge status="conflict" /> : <StatusBadge status="matched" />}
                   </span>
                 </div>
               )
@@ -457,7 +522,7 @@ export default function MonitoringPage() {
                       {r.diff.toFixed(4)}
                     </span>
                     <span className="w-24 flex justify-center">
-                      {isMismatch ? <StatusBadge status="conflict" /> : <StatusBadge status="running" />}
+                      {isMismatch ? <StatusBadge status="conflict" /> : <StatusBadge status="matched" />}
                     </span>
                   </div>
                 )
@@ -534,7 +599,7 @@ export default function MonitoringPage() {
                       )}
                     </span>
                     <span className="w-20 flex justify-center">
-                      {c.is_conflict ? <StatusBadge status="conflict" /> : <StatusBadge status="running" />}
+                      {c.is_conflict ? <StatusBadge status="conflict" /> : <StatusBadge status="closable" />}
                     </span>
                   </div>
                 )

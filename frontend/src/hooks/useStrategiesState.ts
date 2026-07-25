@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react'
+import { useCallback, useEffect, useState, useRef } from 'react'
 import {
   listInstances,
   listTemplates,
@@ -58,16 +58,44 @@ export function useStrategiesState() {
   const contractSymbols = filteredSymbols.filter((s) => isContractPair(s))
   const spotSymbols = filteredSymbols.filter((s) => !isContractPair(s))
 
-  const loadData = () => {
+  const refreshInstances = useCallback((showLoading = false) => {
+    if (showLoading) setLoading(true)
+    return listInstances()
+      .then((res) => setInstances(res.data))
+      .catch(() => {})
+      .finally(() => {
+        if (showLoading) setLoading(false)
+      })
+  }, [])
+
+  const loadData = useCallback(() => {
     setLoading(true)
     Promise.all([
       listInstances().then((res) => setInstances(res.data)).catch(() => {}),
       listTemplates().then((res) => setTemplates(res.data)).catch(() => {}),
       listAccounts().then((res) => setAccounts(res.data)).catch(() => {}),
     ]).finally(() => setLoading(false))
-  }
+  }, [])
 
-  useEffect(() => { loadData() }, [])
+  useEffect(() => {
+    loadData()
+
+    // 策略可能在监测页、其他浏览器标签或后端任务中改变状态。
+    // 定时刷新实例状态，并在页面重新获得焦点时立即同步。
+    const pollId = setInterval(() => refreshInstances(), 5000)
+    const refreshOnFocus = () => refreshInstances()
+    const refreshOnVisible = () => {
+      if (document.visibilityState === 'visible') refreshInstances()
+    }
+    window.addEventListener('focus', refreshOnFocus)
+    document.addEventListener('visibilitychange', refreshOnVisible)
+
+    return () => {
+      clearInterval(pollId)
+      window.removeEventListener('focus', refreshOnFocus)
+      document.removeEventListener('visibilitychange', refreshOnVisible)
+    }
+  }, [loadData, refreshInstances])
 
   // poll events for expanded strategy
   useEffect(() => {

@@ -1,8 +1,8 @@
 from datetime import datetime, timezone
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from config import FRONTEND_DIR, CORS_ORIGINS
+from spa_static import SPAStaticFiles
 
 from database import init_db
 from routers.auth import router as auth_router
@@ -51,7 +51,7 @@ app.include_router(analytics_router)
 app.include_router(sandbox_router)
 
 if FRONTEND_DIR.exists():
-    app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="static")
+    app.mount("/", SPAStaticFiles(directory=str(FRONTEND_DIR), html=True), name="static")
 
 
 @app.on_event("startup")

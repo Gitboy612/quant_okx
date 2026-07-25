@@ -8,6 +8,8 @@ const statusConfig: Record<string, { label: string; dotColor: string; textColor:
   stopped: { label: '已停止', dotColor: 'bg-[#505C78]', textColor: 'text-[#7B86A2]', bgColor: 'bg-[#505C78]/10', glow: false },
   error: { label: '异常', dotColor: 'bg-[#FF4060]', textColor: 'text-[#FF4060]', bgColor: 'bg-[#FF4060]/10', glow: true },
   conflict: { label: '仓位冲突', dotColor: 'bg-[#FF4060]', textColor: 'text-[#FF4060]', bgColor: 'bg-[#FF4060]/10', glow: true },
+  matched: { label: '对账一致', dotColor: 'bg-[#00D4AA]', textColor: 'text-[#00D4AA]', bgColor: 'bg-[#00D4AA]/10', glow: false },
+  closable: { label: '可平仓', dotColor: 'bg-[#00D4AA]', textColor: 'text-[#00D4AA]', bgColor: 'bg-[#00D4AA]/10', glow: false },
 }
 
 export default function StatusBadge({ status }: StatusBadgeProps) {

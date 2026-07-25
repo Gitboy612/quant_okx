@@ -2,6 +2,21 @@
 
 This review is based on the current backend implementation. It focuses on changes that most improve safety, correctness, operability, and maintainability for a system capable of placing live trades.
 
+## SS Project 专项：策略执行、PnL、订单与归因
+
+本专项已与现有 PnL、归因、订单恢复规格进行去重，并整理为可执行开发计划：[`ss-project-pnl-order-attribution-development.md`](./ss-project-pnl-order-attribution-development.md)。当前需要优先处理的结论如下：
+
+1. **策略状态必须区分“数据库期望状态”和“运行时真实状态”**。手动修改 `strategy_instances.status` 只改变展示字段，不代表对应协程、挂单和行情订阅已经启动或停止；接口需要返回状态来源、任务存活、心跳时间和状态漂移告警。
+2. **单策略 PnL 统一为成交驱动口径**：`total_pnl = realized_pnl + unrealized_pnl`。已实现盈亏只由已配对的实际成交产生，未实现盈亏只针对仍持有的虚拟净仓位，并使用当前价、实际持仓成本和统一手续费口径。
+3. **新建策略必须从独立零基线开始**。无成交的新策略不应写入污染曲线的全零 `PnlRecord`，不得继承同账户、同币种或同模板的历史订单与 PnL；首笔成交前 API 可以返回展示用零值，但不持久化伪快照。
+4. **账户总盈亏必须聚合每个策略的最新快照**。当前 `backend/routers/pnl.py:get_pnl_summary` 在未指定策略时使用全局最近一条有效记录作为总值，不是 `sum(latest_by_strategy)`；这会导致多策略或新建策略场景下总盈亏口径错误。
+5. **策略中断恢复需要持久化状态机和对账流程**。恢复顺序应为：读取策略期望状态 → 对账 OKX 活跃订单与成交 → 恢复虚拟仓位和 realized 基线 → 重算 unrealized → 恢复行情订阅与执行循环；所有步骤必须可重复执行且不能重复下单或重复记账。
+6. **订单主键语义必须固定**。`orders.id` 是数据库内部主键；`orders.order_id` 必须保存 OKX 返回的 `ordId` 并保持唯一；`orders.cl_ord_id` 保存客户端订单号。成交、撤单、恢复、去重与 PnL 核算统一使用该映射。
+7. **行情并非逐个实时查询所有币种**。展示层每 20 秒请求一次选定币种，后端 REST 接口拉取 OKX 全部 SPOT tickers 后缓存 15 秒，再只返回请求币种；策略执行层按实际订阅/持仓品种使用 WebSocket 缓存或单品种查询。需要增加行情时间戳、陈旧阈值和降级标记。
+8. **归因分析必须与 PnL 汇总共享同一快照选择器和时间口径**。按币种、策略类型、时间段三个维度应满足 realized、unrealized 和 total 的交叉汇总一致性，并避免把累计值误当区间增量。
+
+专项上线门槛：多策略总盈亏恒等式、新策略零基线、重启恢复幂等、`ordId` 去重、行情陈旧标记、三维归因交叉核对均须有自动化测试；现有 PnL/研究相关失败测试清零后再进入实盘验证。
+
 ## Priority 0 — address before exposing the service or using meaningful live funds
 
 ### 1. Remove insecure bootstrap credentials and fail closed in production
@@ -224,4 +239,3 @@ Orders, PnL snapshots, API call bodies, operation logs, strategy events, and not
 - OKX clients use time synchronization, rate limiting, timeouts, retries, and explicit shutdown paths.
 - Strategy-level PnL accounting, position reconciliation, and capital/margin controls provide a useful domain foundation.
 - Demo mode, backtesting, dry-run, and sandbox workflows support a safer path toward live trading.
-

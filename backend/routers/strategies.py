@@ -632,6 +632,8 @@ async def start_instance(
 
     if instance.status == "running":
         raise HTTPException(status_code=400, detail="策略已在运行中")
+    if instance.status == "paused":
+        raise HTTPException(status_code=400, detail="策略已暂停，请使用恢复操作")
 
     feasibility = await strategy_engine.check_feasibility(instance_id)
     if not feasibility.get("ok"):
@@ -723,6 +725,8 @@ async def pause_instance(
     instance = db.query(StrategyInstance).filter(StrategyInstance.id == instance_id).first()
     if not instance:
         raise HTTPException(status_code=404, detail="策略实例不存在")
+    if instance.status != "running":
+        raise HTTPException(status_code=400, detail="只有运行中的策略可以暂停")
 
     await strategy_engine.pause_strategy(instance_id)
 
@@ -750,6 +754,8 @@ async def resume_instance(
     instance = db.query(StrategyInstance).filter(StrategyInstance.id == instance_id).first()
     if not instance:
         raise HTTPException(status_code=404, detail="策略实例不存在")
+    if instance.status != "paused":
+        raise HTTPException(status_code=400, detail="只有暂停中的策略可以恢复")
 
     await strategy_engine.resume_strategy(instance_id)
 

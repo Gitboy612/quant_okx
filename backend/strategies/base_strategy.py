@@ -37,6 +37,8 @@ class BaseStrategy(ABC):
         self._last_conflict_check_ts: float = 0.0
         self._last_conflict_check_result: bool = True
         self._fee_rate = float(self.params.get("fee_rate", 0.001))
+        # 下单与暂停/停止撤单互斥，避免批量下单尚未登记完毕时先完成撤单。
+        self._order_operation_lock = asyncio.Lock()
 
         # 旧实例参数迁移：检测缺失字段并补默认值（SubTask 1.4）
         self._param_migrated = False
@@ -577,8 +579,9 @@ class BaseStrategy(ABC):
             self._ws_client.on_order_update(self._on_ws_order_update)
         # 设置合约杠杆（SubTask 2.2）；失败则阻止启动
         if not await self._apply_leverage_settings():
+            self._running = False
             self.update_status("error")
-            return
+            raise RuntimeError("合约杠杆设置失败，策略未启动")
         self._record_event("started", "策略已启动")
 
     def _on_ws_order_update(self, ord_id: str, state: str, order_data: dict):
@@ -614,13 +617,16 @@ class BaseStrategy(ABC):
         try:
             asyncio.get_running_loop()
             # 在事件循环中：用 create_task 调度异步清理，不阻塞调用方
-            asyncio.create_task(self._pause_async(symbol))
+            return asyncio.create_task(self._pause_async(symbol))
         except RuntimeError:
             # 无事件循环：用 asyncio.run 运行完整异步清理（含 record_event / record_final_pnl）
             asyncio.run(self._pause_async(symbol))
+            return None
 
     async def _pause_async(self, symbol: str):
-        cancelled = await self.order_manager.cancel_all(symbol)
+        async with self._order_operation_lock:
+            cancelled = await self.order_manager.cancel_all(symbol)
+            await self.order_manager.flush_pending_persists()
         self._record_event("paused", f"策略已暂停, 撤销 {cancelled} 笔订单")
         self.record_final_pnl()
 
@@ -635,12 +641,15 @@ class BaseStrategy(ABC):
         # Bug 6: 检测是否在事件循环中，避免 asyncio.run 与主循环冲突
         try:
             asyncio.get_running_loop()
-            asyncio.create_task(self._stop_async(symbol))
+            return asyncio.create_task(self._stop_async(symbol))
         except RuntimeError:
             asyncio.run(self._stop_async(symbol))
+            return None
 
     async def _stop_async(self, symbol: str):
-        cancelled = await self.order_manager.cancel_all(symbol)
+        async with self._order_operation_lock:
+            cancelled = await self.order_manager.cancel_all(symbol)
+            await self.order_manager.flush_pending_persists()
         self._record_event("stopped", f"策略已停止, 撤销 {cancelled} 笔订单")
         self.record_final_pnl()
 
@@ -733,6 +742,7 @@ class BaseStrategy(ABC):
                 px=str(price),
                 sz=str(quantity),
                 state="live",
+                order_type=order_type,
             )
         elif order_id:
             update_kwargs = {"state": status}

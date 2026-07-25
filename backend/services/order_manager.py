@@ -14,6 +14,7 @@ class OrderInfo:
     clOrdId: str = ""
     symbol: str = ""
     side: str = ""
+    orderType: str = "limit"
     px: str = ""
     sz: str = ""
     state: str = "live"
@@ -33,6 +34,7 @@ class OrderInfo:
             "clOrdId": self.clOrdId,
             "symbol": self.symbol,
             "side": self.side,
+            "orderType": self.orderType,
             "px": self.px,
             "sz": self.sz,
             "state": self.state,
@@ -78,7 +80,17 @@ class OrderManager:
         self._total_buy_value: float = 0.0     # 累计买入价值（qty × px）
         self._total_sell_qty: float = 0.0      # 累计卖出量
 
-    async def add_order(self, ordId: str, clOrdId: str, symbol: str, side: str, px: str, sz: str, state: str = "live"):
+    async def add_order(
+        self,
+        ordId: str,
+        clOrdId: str,
+        symbol: str,
+        side: str,
+        px: str,
+        sz: str,
+        state: str = "live",
+        order_type: str = "limit",
+    ):
         # 获取 instrument 元数据
         inst_info = await self._instrument_cache.get_instrument(symbol, self._okx_client)
         ct_val = inst_info.get("ctVal", 1.0)
@@ -91,6 +103,7 @@ class OrderManager:
             clOrdId=clOrdId,
             symbol=symbol,
             side=side,
+            orderType=order_type,
             px=px,
             sz=sz,
             state=state,
@@ -115,6 +128,7 @@ class OrderManager:
                 px=o.get("px", ""),
                 sz=o.get("sz", ""),
                 state=o.get("state", "live"),
+                order_type=o.get("order_type", o.get("ordType", "limit")),
             )
 
     def update_order(self, ordId: str, **kwargs):
@@ -232,6 +246,21 @@ class OrderManager:
                 cancelled_count += 1
         return cancelled_count
 
+    async def flush_pending_persists(self):
+        """等待异步订单落库完成，并以当前内存状态做一次最终一致性写入。"""
+        while self._pending_persist_tasks:
+            pending = list(self._pending_persist_tasks)
+            await asyncio.gather(*pending, return_exceptions=True)
+
+        # add/live 与 cancel 更新可能由不同线程并发写入；全部完成后再按当前
+        # OrderInfo 状态落库一次，保证暂停/停止接口返回时数据库不是旧状态。
+        orders = list(self._orders.values())
+        if orders:
+            await asyncio.gather(
+                *(asyncio.to_thread(self._persist_to_db, order) for order in orders),
+                return_exceptions=True,
+            )
+
     def load_from_db(self) -> int:
         db = self._db_session_factory()
         try:
@@ -248,6 +277,7 @@ class OrderManager:
                         clOrdId=row.cl_ord_id or "",
                         symbol=row.symbol,
                         side=row.side,
+                        orderType=row.order_type or "limit",
                         px=str(row.price) if row.price else "",
                         sz=str(row.quantity) if row.quantity else "",
                         state=row.state or "live",
@@ -321,7 +351,7 @@ class OrderManager:
                     order_id=order.ordId,
                     cl_ord_id=order.clOrdId,
                     side=order.side,
-                    order_type="limit",
+                    order_type=order.orderType,
                     price=float(order.px) if order.px else None,
                     quantity=float(order.sz) if order.sz else None,
                     filled_quantity=float(order.fillSz) if order.fillSz else 0,
