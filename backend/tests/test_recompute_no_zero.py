@@ -178,10 +178,7 @@ class TestHeartbeatFallback:
 
     @pytest.mark.asyncio
     async def test_heartbeat_recompute_none_returns_zero_snapshot(self):
-        """无基准且 recompute 也返回 None（无成交）时 heartbeat 写全零初始心跳
-
-        确保盈亏曲线有持续数据点，避免策略运行很久却只有 1 条记录。
-        """
+        """无基准且 recompute 也返回 None（无成交）时 heartbeat 返回内存零快照且不落库。"""
         instance = _make_instance()
         mock_db = _make_heartbeat_mock_db(instance=instance, latest_pnl=None)
 
@@ -199,8 +196,8 @@ class TestHeartbeatFallback:
         assert result.order_count == 0
         # recompute 被调用兜底
         mock_recompute.assert_awaited_once_with(1, None)
-        # 写入全零 PnlRecord
-        mock_db.add.assert_called_once()
+        # 不写入全零 PnlRecord
+        mock_db.add.assert_not_called()
 
 
 # ===========================================================================

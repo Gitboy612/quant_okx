@@ -247,6 +247,13 @@ quant_okx/
 
 ## Documentation
 
+- [Technical development guide (Chinese)](docs/development-guide.md)
+- [System architecture (Chinese)](docs/architecture.md)
+- [API reference (Chinese)](docs/api-reference.md)
+- [Data dictionary (Chinese)](docs/data-dictionary.md)
+- [Development and deployment guide (Chinese)](docs/deployment-guide.md)
+- [Testing guide (Chinese)](docs/testing-guide.md)
+- [Troubleshooting and technical debt (Chinese)](docs/troubleshooting.md)
 - [User guide](docs/user-guide.md)
 - [Strategy writing guide](docs/strategy-writing-guide.md)
 - [Product positioning and current limitations](docs/product-positioning.md)

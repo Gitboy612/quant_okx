@@ -91,6 +91,27 @@ class OrderManager:
         state: str = "live",
         order_type: str = "limit",
     ):
+        # 成交/订单去重：同一 OKX ordId 已存在则更新而非重复创建
+        if ordId and ordId in self._orders:
+            existing = self._orders[ordId]
+            if clOrdId and not existing.clOrdId:
+                existing.clOrdId = clOrdId
+            self.update_order(ordId, state=state)
+            return existing
+        # clOrdId 幂等：本地已有相同客户端订单号时，复用已有记录
+        if clOrdId:
+            for existing in self._orders.values():
+                if existing.clOrdId == clOrdId:
+                    if ordId and existing.ordId != ordId:
+                        # 超时恢复后拿到真实 ordId：迁移内存键
+                        old_id = existing.ordId
+                        self._orders.pop(old_id, None)
+                        existing.ordId = ordId
+                        self._orders[ordId] = existing
+                        self._place_ts_map[ordId] = self._place_ts_map.pop(old_id, time.time())
+                    self.update_order(existing.ordId, state=state)
+                    return existing
+
         # 获取 instrument 元数据
         inst_info = await self._instrument_cache.get_instrument(symbol, self._okx_client)
         ct_val = inst_info.get("ctVal", 1.0)
@@ -117,6 +138,14 @@ class OrderManager:
         self._orders[ordId] = order
         self._async_persist(order)
         return order
+
+    def get_order_by_cl_ord_id(self, cl_ord_id: str) -> OrderInfo | None:
+        if not cl_ord_id:
+            return None
+        for order in self._orders.values():
+            if order.clOrdId == cl_ord_id:
+                return order
+        return None
 
     async def add_batch(self, orders: list[dict]):
         for o in orders:
@@ -267,6 +296,7 @@ class OrderManager:
             from models.order import Order
             orders = db.query(Order).filter(
                 Order.account_id == self._account_id,
+                Order.strategy_instance_id == self._strategy_instance_id,
                 Order.status.in_(["live"]),
             ).all()
             count = 0
@@ -330,7 +360,12 @@ class OrderManager:
             from models.order import Order
 
             existing = db.query(Order).filter(Order.order_id == order.ordId).first()
+            if existing is None and order.clOrdId:
+                existing = db.query(Order).filter(Order.cl_ord_id == order.clOrdId).first()
             if existing:
+                existing.order_id = order.ordId or existing.order_id
+                if order.clOrdId:
+                    existing.cl_ord_id = order.clOrdId
                 existing.state = order.state
                 existing.fill_px = float(order.fillPx) if order.fillPx else None
                 existing.fill_sz = float(order.fillSz) if order.fillSz else None

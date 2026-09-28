@@ -24,6 +24,7 @@ class TrendStrategy(BaseStrategy):
             "poll_interval": float(self.params.get("poll_interval", 60)),
             "enter_on_start": bool(self.params.get("enter_on_start", False)),
             "closed_candle_only": bool(self.params.get("closed_candle_only", True)),
+            "long_only": bool(self.params.get("long_only", False)),
         }
 
     async def validate_params(self) -> bool:
@@ -111,6 +112,32 @@ class TrendStrategy(BaseStrategy):
             "reason": reason,
         }
 
+    def _build_market_order_kwargs(
+        self,
+        symbol: str,
+        signal: str,
+        order_qty: float,
+    ) -> dict:
+        """按交易品种和 OKX 持仓模式构造市价单参数。"""
+        order_kwargs = {
+            "inst_id": symbol,
+            "side": signal,
+            "ord_type": "market",
+            "sz": str(order_qty),
+        }
+        if "-SWAP" in symbol and self._position_mode == "long_short_mode":
+            if signal == "buy":
+                order_kwargs["pos_side"] = (
+                    "short" if self._position < 0 else "long"
+                )
+            else:
+                order_kwargs["pos_side"] = (
+                    "long" if self._position > 0 else "short"
+                )
+        elif "-SWAP" not in symbol:
+            order_kwargs["tgt_ccy"] = "base_ccy"
+        return order_kwargs
+
     async def _on_order_filled(self, order_info):
         """Handle order fill event for position tracking."""
         symbol = order_info.symbol
@@ -168,6 +195,32 @@ class TrendStrategy(BaseStrategy):
         except Exception as e:
             print(f"[TrendStrategy] _on_ticker_update error: {e}")
 
+    async def _sync_active_orders(self, symbol: str):
+        """REST 兜底同步活动订单，防止市价单成交早于 WS 回调。"""
+        for order in list(self.order_manager.get_active_orders()):
+            if order.symbol != symbol:
+                continue
+            try:
+                data = await self.client.get_order(symbol, order.ordId)
+                if not data:
+                    continue
+                info = data[0]
+                state = info.get("state", order.state)
+                self.order_manager.update_order(
+                    order.ordId,
+                    state=state,
+                    fillPx=info.get("fillPx", ""),
+                    fillSz=info.get("fillSz", ""),
+                    fee=info.get("fee", ""),
+                    uTime=info.get("uTime", ""),
+                )
+            except Exception as e:
+                self._record_event(
+                    "order_sync_warning",
+                    f"趋势订单 REST 同步失败: ordId={order.ordId} err={e}",
+                    {"order_id": order.ordId, "symbol": symbol, "error": str(e)},
+                )
+
     async def execute(self):
         if not await self.validate_params():
             self.update_status("error")
@@ -182,6 +235,7 @@ class TrendStrategy(BaseStrategy):
         poll_interval = runtime["poll_interval"]
         enter_on_start = runtime["enter_on_start"]
         closed_candle_only = runtime["closed_candle_only"]
+        long_only = runtime["long_only"]
 
         last_signal = None
         last_processed_candle_ts = None
@@ -195,6 +249,22 @@ class TrendStrategy(BaseStrategy):
             await market_data_service.subscribe_ticker(symbol, self._on_ticker_update)
         except Exception as e:
             print(f"[TrendStrategy] WS ticker subscribe failed, using REST fallback: {e}")
+
+        # OKX 双向持仓模式要求合约订单显式传 posSide。
+        self._position_mode = "net_mode"
+        if "-SWAP" in symbol:
+            try:
+                account_configs = await self.client.account.get_config()
+                if account_configs:
+                    self._position_mode = str(
+                        account_configs[0].get("posMode", "net_mode")
+                    )
+            except Exception as e:
+                self._record_event(
+                    "account_config_warning",
+                    f"读取 OKX 持仓模式失败，按 net_mode 处理: {e}",
+                    {"symbol": symbol, "error": str(e)},
+                )
 
         # Get initial equity once at start (use shared cache to reduce API calls)
         try:
@@ -227,6 +297,9 @@ class TrendStrategy(BaseStrategy):
                 db.close()
         except Exception:
             pass
+
+        # 恢复并核对本策略遗留的活动订单；OrderManager 已按实例隔离。
+        await self.sync_orders(symbol)
 
         while self._running:
             if self._paused:
@@ -269,12 +342,29 @@ class TrendStrategy(BaseStrategy):
                 last_processed_candle_ts = candle_ts
                 first_evaluation = False
 
+                if signal == "sell" and long_only and self._position <= 0:
+                    self._record_event(
+                        "signal_skipped",
+                        f"仅做多模式跳过空仓 SELL 信号: {symbol}",
+                        {
+                            "symbol": symbol,
+                            "bar": bar,
+                            "candle_ts": candle_ts,
+                            "position": self._position,
+                            **snapshot,
+                        },
+                    )
+                    signal = None
+
                 if signal and signal != last_signal:
+                    order_kwargs = self._build_market_order_kwargs(
+                        symbol,
+                        signal,
+                        order_qty,
+                    )
+
                     response = await self.client.place_order(
-                        inst_id=symbol,
-                        side=signal,
-                        ord_type="market",
-                        sz=str(order_qty),
+                        **order_kwargs,
                     )
                     order_id, response_error = self._parse_place_order_response(response)
                     if response_error:
@@ -318,6 +408,7 @@ class TrendStrategy(BaseStrategy):
                     )
                     last_signal = signal
 
+                await self._sync_active_orders(symbol)
                 consecutive_errors = 0
 
             except Exception as e:

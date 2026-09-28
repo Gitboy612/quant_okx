@@ -230,11 +230,7 @@ class TestHeartbeatSnapshot:
 
     @pytest.mark.asyncio
     async def test_heartbeat_no_latest_writes_zero(self):
-        """无最新 PnlRecord 且无成交时 heartbeat_snapshot 写一条全零初始心跳。
-
-        修复前：recompute 返回 None 时 heartbeat 也返回 None，不写记录。
-        修复后：用全零默认值写一条心跳，确保盈亏曲线有持续数据点。
-        """
+        """无最新 PnlRecord 且无成交时 heartbeat_snapshot 返回内存零快照且不落库。"""
         instance = _make_instance(account_id=1, symbol="BTC-USDT")
         mock_db = _make_heartbeat_mock_db(instance=instance, latest_pnl=None)
 
@@ -251,9 +247,9 @@ class TestHeartbeatSnapshot:
         assert snapshot.net_position == pytest.approx(0.0, abs=1e-12)
         assert snapshot.avg_buy_price == pytest.approx(0.0, abs=1e-12)
         assert snapshot.order_count == 0
-        # 写入 PnlRecord 并提交
-        mock_db.add.assert_called_once()
-        mock_db.commit.assert_called_once()
+        # 不写入 PnlRecord
+        mock_db.add.assert_not_called()
+        mock_db.commit.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_heartbeat_no_instance_returns_none(self):

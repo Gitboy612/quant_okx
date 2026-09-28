@@ -252,12 +252,32 @@ class BaseStrategy(ABC):
             return False
         return True
 
+    @staticmethod
+    def _extract_cl_ord_id(response: dict | None = None, item: dict | None = None) -> str:
+        """从下单响应中提取 clOrdId（含 OKXClient 注入的 _clOrdId）。"""
+        if isinstance(item, dict):
+            value = str(item.get("clOrdId") or "").strip()
+            if value:
+                return value
+        if isinstance(response, dict):
+            value = str(response.get("_clOrdId") or "").strip()
+            if value:
+                return value
+            data = response.get("data")
+            if isinstance(data, list) and data and isinstance(data[0], dict):
+                return str(data[0].get("clOrdId") or "").strip()
+        return ""
+
     async def place_order_with_capital_check(self, symbol: str, side: str, ord_type: str, sz, px=None, **kwargs) -> dict:
         """带资金上限校验的下单包装方法（SubTask 1.2）。
 
         先执行 check_capital_limit，通过则调用 client.place_order，
         否则返回拒绝响应 dict（不实际下单）。供策略调用替代直接 client.place_order。
+
+        下单前生成 clOrdId；网络超时/不确定结果时先按 clOrdId 查询，避免重复下单。
         """
+        from services.order_ids import generate_cl_ord_id
+
         qty = float(sz) if sz else 0.0
         price = float(px) if px else 0.0
         if not self.check_capital_limit(symbol, side, qty, price):
@@ -266,9 +286,61 @@ class BaseStrategy(ABC):
                 "msg": "capital_limit_exceeded",
                 "data": [{"sCode": "-1", "sMsg": "资金上限超出，订单被拒绝"}],
             }
-        return await self.client.place_order(
-            inst_id=symbol, side=side, ord_type=ord_type, sz=sz, px=px,
+        cl_ord_id = kwargs.pop("cl_ord_id", None) or generate_cl_ord_id(self.instance_id)
+        place_kwargs = {}
+        for key in ("pos_side", "reduce_only", "tgt_ccy"):
+            if key in kwargs:
+                place_kwargs[key] = kwargs.pop(key)
+        try:
+            return await self.client.place_order(
+                inst_id=symbol, side=side, ord_type=ord_type, sz=sz, px=px,
+                cl_ord_id=cl_ord_id, **place_kwargs,
+            )
+        except Exception as exc:
+            # 超时或网络中断：用 clOrdId 对账，已受理则返回查询结果，禁止盲目重下
+            recovered = await self._recover_order_by_cl_ord_id(symbol, cl_ord_id)
+            if recovered is not None:
+                return recovered
+            raise exc
+
+    async def _recover_order_by_cl_ord_id(self, symbol: str, cl_ord_id: str) -> dict | None:
+        """按 clOrdId 查询 OKX，若订单已存在则构造与 place_order 成功兼容的响应。"""
+        if not cl_ord_id:
+            return None
+        try:
+            rows = await self.client.get_order(inst_id=symbol, cl_ord_id=cl_ord_id)
+        except Exception as e:
+            self._record_event(
+                "order_clordid_lookup_failed",
+                f"clOrdId 对账失败: {cl_ord_id}; {e}",
+                {"symbol": symbol, "cl_ord_id": cl_ord_id, "error": str(e)},
+            )
+            return None
+        if not rows:
+            return None
+        row = rows[0] if isinstance(rows, list) else rows
+        if not isinstance(row, dict):
+            return None
+        ord_id = row.get("ordId") or ""
+        if not ord_id:
+            return None
+        self._record_event(
+            "order_recovered_by_clordid",
+            f"超时后经 clOrdId 找回订单: clOrdId={cl_ord_id} ordId={ord_id}",
+            {"symbol": symbol, "cl_ord_id": cl_ord_id, "order_id": ord_id},
         )
+        return {
+            "code": "0",
+            "msg": "",
+            "data": [{
+                "ordId": ord_id,
+                "clOrdId": row.get("clOrdId") or cl_ord_id,
+                "sCode": "0",
+                "sMsg": "",
+            }],
+            "_recovered": True,
+            "_clOrdId": cl_ord_id,
+        }
 
     async def check_position_conflict(self, symbol: str, close_qty: float) -> bool:
         """平仓前仓位冲突校验（Task 6: 改代数和）。
@@ -731,12 +803,22 @@ class BaseStrategy(ABC):
     def is_paused(self):
         return self._paused
 
-    async def record_order(self, symbol: str, side: str, order_type: str, price: float, quantity: float, order_id: str = "", status: str = "filled"):
+    async def record_order(
+        self,
+        symbol: str,
+        side: str,
+        order_type: str,
+        price: float,
+        quantity: float,
+        order_id: str = "",
+        status: str = "filled",
+        cl_ord_id: str = "",
+    ):
         # Delegate to OrderManager for persistence
         if status == "live":
             await self.order_manager.add_order(
                 ordId=order_id,
-                clOrdId="",
+                clOrdId=cl_ord_id or "",
                 symbol=symbol,
                 side=side,
                 px=str(price),
@@ -755,6 +837,8 @@ class BaseStrategy(ABC):
                 existing = self.order_manager.get_order(order_id)
                 if existing is None or not existing.fillPx:
                     update_kwargs["fillPx"] = str(price)
+                if cl_ord_id and (existing is None or not existing.clOrdId):
+                    update_kwargs["clOrdId"] = cl_ord_id
             self.order_manager.update_order(order_id, **update_kwargs)
 
         event_type_map = {

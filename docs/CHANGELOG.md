@@ -1,5 +1,17 @@
 # QuantOKX 修改日志
 
+## 2026-09-28
+
+### P0：账户 PnL 聚合、零基线、订单幂等与恢复状态
+
+对应 `docs/ss-project-pnl-order-attribution-development.md` §4 P0：
+
+1. **账户总盈亏**改为各策略最新有效快照之和（`sum(latest_by_strategy)`），不再取全局最近一条。
+2. **新建策略零基线**：无成交时 `heartbeat_snapshot` 只返回内存零快照，不再写入全零 `PnlRecord`。
+3. **clOrdId 幂等**：下单前生成客户端订单号并透传 OKX；超时后按 `clOrdId` 查询；`OrderManager` 按 `ordId`/`clOrdId` 去重落库。
+4. **total_pnl 不变量**：统一经 `compose_total_pnl(realized, unrealized)` 计算。
+5. **恢复状态机基础**：新增 `desired_status`；启动时标记 `recovering` 并对账孤儿订单，不再盲目改成 `stopped`；列表接口返回 `runtime_status` / `status_drift`。
+
 ## 2026-07-23
 
 ### 修复：React 页面刷新返回 404
@@ -202,3 +214,95 @@
   模拟盘趋势生命周期相关测试：`25 passed`。
 - 测试只有项目已有的 Starlette/httpx 弃用提示和未注册 timeout 标记提示，
   无测试失败。
+
+## 2026-07-26
+
+### 优化：三条模拟策略产生测试交易
+
+#### 目标
+
+- 保留现有三条策略类型：
+  - `#1 [OKX-DEMO] BTC 现货网格`
+  - `#2 [OKX-DEMO] ETH 现货网格`
+  - `#3 [OKX-DEMO] BTC 合约趋势`
+- 在 OKX 模拟账户中产生可核对的委托和成交，用于订单、策略状态和 PnL 测试。
+- 防止测试开关在服务重启后反复产生市价单。
+
+#### 账户与安全检查
+
+- OKX 账户：`Test01`，`trade_mode=demo`。
+- 账户模式已切换为 `acctLv=3`（跨币种保证金）。
+- 持仓模式为 `long_short_mode`。
+- 优化前已停止运行中的策略、撤销旧网格委托，并确认无活动合约持仓。
+
+#### 代码修改
+
+- `backend/services/okx_client.py`
+  - 单笔下单支持可选 `posSide`、`reduceOnly` 和 `tgtCcy`。
+  - 未使用可选参数时保持原有请求结构。
+- `backend/strategies/trend_strategy.py`
+  - 启动时读取 OKX `posMode`。
+  - `long_short_mode` 下按信号与虚拟仓位传递正确的 `long`/`short`
+    `posSide`，修复 OKX `51000 Parameter posSide error`。
+  - 增加活动订单 REST 兜底同步，避免市价单成交早于 WebSocket 回调而长期
+    停留在 `live`。
+  - 现货市价单使用 `tgtCcy=base_ccy`，使数量统一按基础币解释。
+  - 增加 `long_only` 参数；空仓时跳过做空信号，避免当前只支持多头 FIFO
+    的策略级 PnL 把空头平均开仓价当成 0。
+- `backend/strategies/grid_strategy.py`
+  - 增加 `demo_test_order_on_start`：仅 OKX 模拟盘允许，启动时提交一次小额
+    现货市价买单。
+  - 测试单被 OKX 接受后自动将开关持久化为 `false`，防止重启重复下单。
+  - 初始网格登记完成后再发送测试单，避免快速成交回调和初始网格并发生成
+    重复相邻订单。
+  - 完整校验测试单的 OKX `code`、`sCode` 与 `ordId`。
+- `backend/services/order_manager.py`
+  - 从数据库恢复活动订单时同时按 `account_id` 和
+    `strategy_instance_id` 过滤，修复同账户三条策略互相读取订单的问题。
+- `backend/services/strategy_engine.py`
+  - 网格模板暴露一次性模拟测试单开关。
+  - 趋势模板暴露“仅做多”开关。
+  - 趋势慢线最小周期由 5 调整为 3，允许灵敏的 `2/3` 测试配置。
+
+#### 当前策略参数
+
+| 策略 | 关键测试参数 |
+| --- | --- |
+| BTC 现货网格 | 区间 `64456.87–64650.53`、7 格、每格 `0.0001 BTC`、REST 兜底 1 秒 |
+| ETH 现货网格 | 区间 `1879.64–1885.28`、7 格、每格 `0.001 ETH`、REST 兜底 1 秒 |
+| BTC 合约趋势 | `2/3` 均线、`1m` K 线、10 秒轮询、每次 `0.01` 张、仅做多 |
+
+两个网格的区间按照配置时实时价格约 `±0.15%` 设置；价格明显离开区间时需要
+重新居中，不能把该固定区间长期当成生产参数。
+
+#### 模拟盘成交验证
+
+- BTC 现货网格：
+  - 一次性市价买单成交；
+  - 中心网格买单成交；
+  - 累计验证 `2` 笔 filled，当前保留 `6` 笔活动窄网格委托。
+- ETH 现货网格：
+  - 一次性市价买单成交；
+  - 买卖网格发生完全成交和部分成交；
+  - 累计验证 `4` 笔 filled，当前保留 `6` 笔活动窄网格委托。
+- BTC 合约趋势：
+  - 修复后 SELL 市价单以 `posSide=short` 成交；
+  - 随后的 BUY 市价单正确平空；
+  - 额外完成空仓清理单，累计数据库中 `4` 笔 filled；
+  - 当前外部合约持仓为 0，实例使用 `long_only=true` 等待下一次买入信号。
+
+三条策略最终状态均为 `running`。最新策略级 PnL：
+
+| 策略 | 净仓位 | 已实现 PnL | 未实现 PnL |
+| --- | ---: | ---: | ---: |
+| BTC 现货网格 | 0 | 0 | 0 |
+| ETH 现货网格 | 0 | -0.0025 | 0 |
+| BTC 合约趋势 | 0 | -0.007241 | 0 |
+
+上述小额亏损主要来自模拟成交价差和手续费，符合测试单预期。
+
+#### 验证结果
+
+- 参数、OKX 响应、双向持仓 `posSide`、现货数量单位、趋势 REST 订单同步、
+  订单实例隔离、状态同步及网格/趋势生命周期：`38 passed`。
+- 仅存在项目已有的 Starlette/httpx 弃用提示和未注册 timeout 标记提示。

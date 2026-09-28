@@ -59,11 +59,10 @@ async def startup():
     init_db()
     strategy_engine.seed_templates()
 
-    from models.user import User
-    from models.strategy import StrategyInstance
-    from models.pnl import PnlRecord
-    from services.auth_service import hash_password
-    from database import SessionLocal
+from models.user import User
+from models.strategy import StrategyInstance
+from services.auth_service import hash_password
+from database import SessionLocal
 
     db = SessionLocal()
     try:
@@ -76,42 +75,25 @@ async def startup():
             db.add(admin)
             db.commit()
 
-        # Mark any running/paused strategies as stopped on server restart
-        orphaned = db.query(StrategyInstance).filter(
-            StrategyInstance.status.in_(["running", "paused"])
-        ).all()
-
-        # 在将 running 改为 stopped 之前，先重建 PnL 基准：
-        # 对 running 实例调用 recompute，刷新 pnl_accounted 标记和 PnlRecord 基准，
-        # 确保重启前未核算的成交被纳入。异常不应阻断 startup。
+        # 启动恢复：保留 desired_status，标记 recovering，对账孤儿订单；
+        # 不再盲目把 running/paused 改成 stopped（避免丢失用户意图）。
         try:
-            await strategy_engine.rebuild_pnl_baselines()
+            recovery = await strategy_engine.recover_orphaned_instances()
+            if recovery:
+                print(f"[startup] Recovered {len(recovery)} strategy instance(s)")
         except Exception as e:
-            print(f"[startup] rebuild_pnl_baselines failed: {e}")
-
-        for inst in orphaned:
-            inst.status = "stopped"
-            inst.stopped_at = datetime.now(timezone.utc)
-        if orphaned:
-            db.commit()
-            # 重置状态后，为每个被重置实例写 unrealized=0 的 PnL 记录，避免仪表盘显示陈旧数据
-            for instance in orphaned:
-                latest_pnl = db.query(PnlRecord).filter(
-                    PnlRecord.strategy_instance_id == instance.id
-                ).order_by(PnlRecord.recorded_at.desc()).first()
-                if latest_pnl:
-                    new_record = PnlRecord(
-                        account_id=instance.account_id,
-                        strategy_instance_id=instance.id,
-                        equity=latest_pnl.equity,
-                        unrealized_pnl=0,
-                        realized_pnl=latest_pnl.realized_pnl,
-                        total_pnl=latest_pnl.realized_pnl,
-                        recorded_at=datetime.now(timezone.utc),
-                    )
-                    db.add(new_record)
-            db.commit()
-            print(f"[startup] Reset {len(orphaned)} orphaned strategy instances to stopped")
+            print(f"[startup] recover_orphaned_instances failed: {e}")
+            # 回退：至少不要让幽灵 running 状态残留
+            orphaned = db.query(StrategyInstance).filter(
+                StrategyInstance.status.in_(["running", "paused"])
+            ).all()
+            for inst in orphaned:
+                if not getattr(inst, "desired_status", None):
+                    inst.desired_status = inst.status
+                inst.status = "recovering"
+            if orphaned:
+                db.commit()
+                print(f"[startup] Fallback marked {len(orphaned)} instances as recovering")
     finally:
         db.close()
 

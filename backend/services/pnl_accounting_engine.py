@@ -36,6 +36,11 @@ class PnlSnapshot:
     recorded_at: datetime
 
 
+def compose_total_pnl(realized_pnl: float, unrealized_pnl: float) -> float:
+    """统一 total_pnl 入口：始终为 realized + unrealized，禁止独立累计第三套总值。"""
+    return float(realized_pnl or 0) + float(unrealized_pnl or 0)
+
+
 class PnlAccountingEngine:
     """PnL 全量核算引擎（单例）。
 
@@ -140,7 +145,7 @@ class PnlAccountingEngine:
             elif net_position == 0:
                 unrealized_pnl = 0.0
             # 重算 total_pnl = realized + unrealized（保持一致性）
-            total_pnl = realized_pnl + unrealized_pnl
+            total_pnl = compose_total_pnl(realized_pnl, unrealized_pnl)
 
             # 4. equity：保留上次 equity（账户级快照）；无记录且提供 client 时用当前价兜底
             latest = self._get_latest_pnl_record(db, strategy_instance_id)
@@ -377,7 +382,7 @@ class PnlAccountingEngine:
                         unrealized_pnl -= abs(net_position) * current_price * fee_rate
 
             # 5. total_pnl
-            total_pnl = realized_pnl + unrealized_pnl
+            total_pnl = compose_total_pnl(realized_pnl, unrealized_pnl)
 
             # 6. equity：保留上次 equity（账户级快照，不随策略 PnL 变动）
             equity = latest_equity
@@ -453,43 +458,19 @@ class PnlAccountingEngine:
                 snapshot = await self.recompute(strategy_instance_id, client)
                 if snapshot is not None:
                     return snapshot
-                # recompute 返回 None（无成交）：写一条全零初始心跳，
-                # 确保盈亏曲线有持续数据点，避免策略运行很久却只有 1 条记录
-                realized_pnl = 0.0
-                net_position = 0.0
-                avg_buy_price = 0.0
-                total_fee = 0.0
-                order_count = 0
-                equity = 0.0
-                unrealized_pnl = 0.0
-                total_pnl = 0.0
+                # recompute 返回 None（无成交）：返回内存零快照，不落库，
+                # 避免污染曲线与账户“最近有效记录”选择（新建策略零基线）
                 recorded_at = datetime.now(timezone.utc)
-                record = PnlRecord(
-                    account_id=account_id,
-                    strategy_instance_id=strategy_instance_id,
-                    equity=equity,
-                    unrealized_pnl=unrealized_pnl,
-                    realized_pnl=realized_pnl,
-                    total_pnl=total_pnl,
-                    is_final=False,
-                    recorded_at=recorded_at,
-                    net_position=net_position,
-                    avg_buy_price=avg_buy_price,
-                    total_fee=total_fee,
-                    order_count=order_count,
-                )
-                db.add(record)
-                db.commit()
                 return PnlSnapshot(
                     strategy_instance_id=strategy_instance_id,
-                    realized_pnl=realized_pnl,
-                    unrealized_pnl=unrealized_pnl,
-                    total_pnl=total_pnl,
-                    equity=equity,
-                    net_position=net_position,
-                    avg_buy_price=avg_buy_price,
-                    total_fee=total_fee,
-                    order_count=order_count,
+                    realized_pnl=0.0,
+                    unrealized_pnl=0.0,
+                    total_pnl=0.0,
+                    equity=0.0,
+                    net_position=0.0,
+                    avg_buy_price=0.0,
+                    total_fee=0.0,
+                    order_count=0,
                     recorded_at=recorded_at,
                 )
 
@@ -537,7 +518,7 @@ class PnlAccountingEngine:
                         unrealized_pnl = (current_price - avg_buy_price) * net_position
                         unrealized_pnl -= abs(net_position) * current_price * fee_rate
 
-            total_pnl = realized_pnl + unrealized_pnl
+            total_pnl = compose_total_pnl(realized_pnl, unrealized_pnl)
             recorded_at = datetime.now(timezone.utc)
 
             record = PnlRecord(

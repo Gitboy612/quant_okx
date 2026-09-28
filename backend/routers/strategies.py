@@ -473,6 +473,10 @@ def list_instances(db: Session = Depends(get_db), user: User = Depends(get_curre
     result = []
     for inst in instances:
         template = db.query(StrategyTemplate).filter(StrategyTemplate.id == inst.template_id).first()
+        desired = getattr(inst, "desired_status", None) or inst.status or "stopped"
+        status_view = strategy_engine.get_status_view(
+            inst.id, desired_status=desired, db_status=inst.status
+        )
         result.append({
             "id": inst.id,
             "template_id": inst.template_id,
@@ -483,7 +487,11 @@ def list_instances(db: Session = Depends(get_db), user: User = Depends(get_curre
             "symbol": inst.symbol,
             "market_type": inst.market_type,
             "params": inst.params,
-            "status": inst.status,
+            "status": status_view["status"],
+            "desired_status": status_view["desired_status"],
+            "runtime_status": status_view["runtime_status"],
+            "status_drift": status_view["status_drift"],
+            "task_alive": status_view["task_alive"],
             "logic_hash": inst.logic_hash,
             "started_at": to_utc_iso(inst.started_at),
             "stopped_at": to_utc_iso(inst.stopped_at),
@@ -531,6 +539,7 @@ def create_instance(
         market_type=body.market_type,
         params=merged_params,
         status="stopped",
+        desired_status="stopped",
         logic_hash=template.logic_hash,  # 创建时的逻辑版本快照
     )
     db.add(instance)

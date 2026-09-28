@@ -307,21 +307,56 @@ class OKXClient:
         await self._ensure_time_synced()
         return await self.market.get_candles(instId=inst_id, bar=bar, limit=limit)
 
-    async def place_order(self, inst_id: str, side: str, ord_type: str, sz: str, px: str | None = None) -> dict:
+    async def place_order(
+        self,
+        inst_id: str,
+        side: str,
+        ord_type: str,
+        sz: str,
+        px: str | None = None,
+        pos_side: str | None = None,
+        reduce_only: bool | None = None,
+        tgt_ccy: str | None = None,
+        cl_ord_id: str | None = None,
+    ) -> dict:
         await self._ensure_time_synced()
-        # post_only 同 limit 一样需要 px（Task 9: maker-only 下单）
+        from services.order_ids import generate_cl_ord_id
+
+        # post_only 同 limit 一样需要 px（Task 9: post-only 下单）
         body_px = px if (px and ord_type in ("limit", "post_only")) else None
-        return await self.trade.place_order(
+        # 下单前生成/透传 clOrdId，供超时重试幂等与本地落库关联
+        resolved_cl_ord_id = cl_ord_id or generate_cl_ord_id()
+        kwargs = dict(
             instId=inst_id,
             tdMode="cross",
             side=side,
             ordType=ord_type,
             sz=sz,
             px=body_px,
+            clOrdId=resolved_cl_ord_id,
         )
+        # 仅在需要时传递可选字段，保持现有调用与测试兼容。
+        if pos_side is not None:
+            kwargs["posSide"] = pos_side
+        if reduce_only is not None:
+            kwargs["reduceOnly"] = reduce_only
+        if tgt_ccy is not None:
+            kwargs["tgtCcy"] = tgt_ccy
+        resp = await self.trade.place_order(**kwargs)
+        # 确保调用方可从响应中读回本次使用的 clOrdId（即使交易所未回显）
+        if isinstance(resp, dict):
+            data = resp.get("data")
+            if isinstance(data, list) and data:
+                first = data[0]
+                if isinstance(first, dict) and not first.get("clOrdId"):
+                    first["clOrdId"] = resolved_cl_ord_id
+            resp.setdefault("_clOrdId", resolved_cl_ord_id)
+        return resp
 
     async def batch_place_orders(self, orders: list[dict]) -> dict:
         await self._ensure_time_synced()
+        from services.order_ids import generate_cl_ord_id
+
         processed_orders = []
         for o in orders:
             item = {
@@ -330,19 +365,30 @@ class OKXClient:
                 "ordType": o.get("ordType", "limit"),
                 "sz": o["sz"],
                 "tdMode": "cross",
+                "clOrdId": o.get("clOrdId") or o.get("cl_ord_id") or generate_cl_ord_id(),
             }
             if "px" in o:
                 item["px"] = o["px"]
             processed_orders.append(item)
         return await self.trade.batch_place_orders(orders=processed_orders)
 
-    async def cancel_order(self, inst_id: str, order_id: str) -> dict:
+    async def cancel_order(
+        self,
+        inst_id: str,
+        order_id: str | None = None,
+        cl_ord_id: str | None = None,
+    ) -> dict:
         await self._ensure_time_synced()
-        return await self.trade.cancel_order(instId=inst_id, ordId=order_id)
+        return await self.trade.cancel_order(instId=inst_id, ordId=order_id, clOrdId=cl_ord_id)
 
-    async def get_order(self, inst_id: str, order_id: str) -> list:
+    async def get_order(
+        self,
+        inst_id: str,
+        order_id: str | None = None,
+        cl_ord_id: str | None = None,
+    ) -> list:
         await self._ensure_time_synced()
-        return await self.trade.get_order(instId=inst_id, ordId=order_id)
+        return await self.trade.get_order(instId=inst_id, ordId=order_id, clOrdId=cl_ord_id)
 
     async def get_pending_orders(self, inst_id: str | None = None) -> list:
         await self._ensure_time_synced()

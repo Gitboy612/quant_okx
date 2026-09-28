@@ -95,12 +95,45 @@ def _migrate_orders_columns():
                     'ON "orders" ("order_id" ASC)'
                 )
             )
+        # cl_ord_id 唯一索引（允许 NULL/空串重复；SQLite UNIQUE 允许多个 NULL）
+        if "ix_orders_cl_ord_id_unique" not in existing_indexes:
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS ix_orders_cl_ord_id_unique "
+                    'ON "orders" ("cl_ord_id" ASC) '
+                    "WHERE cl_ord_id IS NOT NULL AND cl_ord_id != ''"
+                )
+            )
         # 复合索引：策略 PnL 核算高频查询（strategy_instance_id, status, pnl_accounted）
         if "ix_orders_strategy_status_accounted" not in existing_indexes:
             conn.execute(
                 text(
                     "CREATE INDEX IF NOT EXISTS ix_orders_strategy_status_accounted "
                     "ON orders (strategy_instance_id, status, pnl_accounted)"
+                )
+            )
+
+
+def _migrate_strategy_instances_desired_status():
+    """确保 strategy_instances 表包含 desired_status，并用现有 status 回填。"""
+    insp = inspect(engine)
+    if "strategy_instances" not in insp.get_table_names():
+        return
+    existing_columns = {c["name"] for c in insp.get_columns("strategy_instances")}
+    with engine.begin() as conn:
+        if "desired_status" not in existing_columns:
+            conn.execute(
+                text(
+                    "ALTER TABLE strategy_instances "
+                    "ADD COLUMN desired_status VARCHAR DEFAULT 'stopped'"
+                )
+            )
+            # 回填：把历史 status 视为用户期望状态
+            conn.execute(
+                text(
+                    "UPDATE strategy_instances "
+                    "SET desired_status = COALESCE(status, 'stopped') "
+                    "WHERE desired_status IS NULL OR desired_status = ''"
                 )
             )
 
@@ -172,6 +205,7 @@ def init_db():
     Base.metadata.create_all(bind=engine)
     _migrate_strategy_templates_dsl_config()
     _migrate_strategy_instances_logic_hash()
+    _migrate_strategy_instances_desired_status()
     _migrate_pnl_records_is_final()
     _migrate_orders_columns()
     _migrate_pnl_records_columns()

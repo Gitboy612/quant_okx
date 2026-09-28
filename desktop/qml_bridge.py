@@ -344,7 +344,7 @@ class PnlService(BaseService):
 
     @Slot(result="QVariant")
     def summary(self):
-        """盈亏汇总。对应 GET /api/pnl/summary（取最近 500 条聚合）。"""
+        """盈亏汇总。对应 GET /api/pnl/summary（按策略最新快照求和）。"""
         db = SessionLocal()
         try:
             records = (
@@ -360,13 +360,43 @@ class PnlService(BaseService):
                     "total_pnl": 0,
                     "latest_equity": 0,
                 }
-            latest = records[0]
-            total_realized = latest.realized_pnl or 0
+
+            def _is_all_zero(record) -> bool:
+                return (
+                    (record.total_pnl or 0) == 0
+                    and (record.net_position or 0) == 0
+                    and (record.order_count or 0) == 0
+                    and (record.realized_pnl or 0) == 0
+                    and (record.unrealized_pnl or 0) == 0
+                )
+
+            buckets: dict = {}
+            for record in records:
+                sid = record.strategy_instance_id
+                if sid is None:
+                    continue
+                buckets.setdefault(sid, []).append(record)
+
+            total_realized = 0.0
+            total_unrealized = 0.0
+            latest_equity = 0.0
+            for bucket in buckets.values():
+                latest = None
+                for candidate in bucket:
+                    if not _is_all_zero(candidate):
+                        latest = candidate
+                        break
+                if latest is None:
+                    latest = bucket[0]
+                total_realized += latest.realized_pnl or 0
+                total_unrealized += latest.unrealized_pnl or 0
+                latest_equity += latest.equity or 0
+
             return {
                 "total_realized_pnl": total_realized,
-                "total_unrealized_pnl": latest.unrealized_pnl or 0,
-                "total_pnl": total_realized + (latest.unrealized_pnl or 0),
-                "latest_equity": latest.equity or 0,
+                "total_unrealized_pnl": total_unrealized,
+                "total_pnl": total_realized + total_unrealized,
+                "latest_equity": latest_equity,
             }
         finally:
             db.close()

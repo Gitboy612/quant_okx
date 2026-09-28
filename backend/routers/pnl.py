@@ -77,6 +77,27 @@ def get_pnl_records(
     ]
 
 
+def _is_all_zero_pnl_record(record) -> bool:
+    """全零无意义快照：无持仓、无成交计数、盈亏均为 0。"""
+    return (
+        (record.total_pnl or 0) == 0
+        and (record.net_position or 0) == 0
+        and (record.order_count or 0) == 0
+        and (record.realized_pnl or 0) == 0
+        and (record.unrealized_pnl or 0) == 0
+    )
+
+
+def _pick_latest_meaningful(records: list) -> object | None:
+    """在已按 recorded_at 降序的记录中，跳过全零后取最近有效快照。"""
+    if not records:
+        return None
+    for record in records:
+        if not _is_all_zero_pnl_record(record):
+            return record
+    return records[0]
+
+
 @router.get("/summary")
 def get_pnl_summary(
     account_id: int | None = Query(None),
@@ -95,42 +116,54 @@ def get_pnl_summary(
     if not records:
         return {"total_realized_pnl": 0, "total_unrealized_pnl": 0, "total_pnl": 0, "latest_equity": 0, "by_strategy": []}
 
-    # summary 基准：跳过全 0 无意义记录（total_pnl=0 且 net_position=0 且 order_count=0），
-    # 向前追溯最近的有效记录；若全部为全 0 则退化为第一条（值均为 0，不影响汇总）
-    latest = records[0]
-    for r in records:
-        if not ((r.total_pnl or 0) == 0 and (r.net_position or 0) == 0 and (r.order_count or 0) == 0):
-            latest = r
-            break
-    # realized_pnl 与 unrealized_pnl 均取最新时点值（unrealized 是时点浮动值，不能跨记录求和）
-    total_realized = latest.realized_pnl or 0
-    total_unrealized = latest.unrealized_pnl or 0
-
-    # 按策略实例聚合：每个策略取最新一条记录
+    # 按策略实例聚合：每个策略取最新一条有效记录（跳过全零污染）
     by_strategy = []
     seen_strategy_ids = set()
+    strategy_buckets: dict[int, list] = {}
     for r in records:
         sid = r.strategy_instance_id
-        if sid is None or sid in seen_strategy_ids:
+        if sid is None:
+            continue
+        strategy_buckets.setdefault(sid, []).append(r)
+
+    for sid, bucket in strategy_buckets.items():
+        if sid in seen_strategy_ids:
             continue
         seen_strategy_ids.add(sid)
+        latest_for_strategy = _pick_latest_meaningful(bucket)
+        if latest_for_strategy is None:
+            continue
+        realized = latest_for_strategy.realized_pnl or 0
+        unrealized = latest_for_strategy.unrealized_pnl or 0
         by_strategy.append({
             "strategy_instance_id": sid,
-            "realized_pnl": r.realized_pnl or 0,
-            "unrealized_pnl": r.unrealized_pnl or 0,
-            "total_pnl": (r.realized_pnl or 0) + (r.unrealized_pnl or 0),
-            "equity": r.equity or 0,
-            "net_position": r.net_position,
-            "avg_buy_price": r.avg_buy_price,
-            "total_fee": r.total_fee,
-            "order_count": r.order_count,
+            "realized_pnl": realized,
+            "unrealized_pnl": unrealized,
+            "total_pnl": realized + unrealized,
+            "equity": latest_for_strategy.equity or 0,
+            "net_position": latest_for_strategy.net_position,
+            "avg_buy_price": latest_for_strategy.avg_buy_price,
+            "total_fee": latest_for_strategy.total_fee,
+            "order_count": latest_for_strategy.order_count,
         })
+
+    if strategy_instance_id is not None:
+        # 单策略：账户口径退化为该策略最新有效快照
+        latest = _pick_latest_meaningful(records)
+        total_realized = (latest.realized_pnl or 0) if latest else 0
+        total_unrealized = (latest.unrealized_pnl or 0) if latest else 0
+        latest_equity = (latest.equity or 0) if latest else 0
+    else:
+        # 账户口径：各策略最新快照之和（新建无成交策略贡献 0，不覆盖其他策略）
+        total_realized = sum(item["realized_pnl"] for item in by_strategy)
+        total_unrealized = sum(item["unrealized_pnl"] for item in by_strategy)
+        latest_equity = sum(item["equity"] for item in by_strategy)
 
     return {
         "total_realized_pnl": total_realized,
         "total_unrealized_pnl": total_unrealized,
         "total_pnl": total_realized + total_unrealized,
-        "latest_equity": latest.equity or 0,
+        "latest_equity": latest_equity,
         "by_strategy": by_strategy,
     }
 

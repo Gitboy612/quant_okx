@@ -202,7 +202,7 @@ class TestPnlSummary:
         assert result["total_unrealized_pnl"] != 45
 
     def test_summary_by_strategy(self):
-        """两条记录分属不同 strategy_instance_id，by_strategy 长度为 2"""
+        """两条记录分属不同 strategy_instance_id，by_strategy 长度为 2，账户合计为两者之和"""
         base = datetime(2024, 1, 1, tzinfo=timezone.utc)
         records = [
             PnlRecord(
@@ -219,9 +219,13 @@ class TestPnlSummary:
         mock_db = self._make_mock_db(records)
         result = get_pnl_summary(account_id=None, strategy_instance_id=None, db=mock_db, user=MagicMock())
         assert len(result["by_strategy"]) == 2
+        assert result["total_realized_pnl"] == 30 + 15
+        assert result["total_unrealized_pnl"] == 25 + 10
+        assert result["total_pnl"] == 55 + 25
+        assert result["latest_equity"] == 1000 + 900
 
     def test_summary_total_pnl(self):
-        """total_pnl == total_realized + total_unrealized == 30 + 25 == 55"""
+        """单策略多快照：total_pnl == 最新 realized + unrealized == 30 + 25 == 55"""
         records = self._make_records_same_strategy()
         mock_db = self._make_mock_db(records)
         result = get_pnl_summary(account_id=None, strategy_instance_id=None, db=mock_db, user=MagicMock())
@@ -229,6 +233,32 @@ class TestPnlSummary:
         assert result["total_unrealized_pnl"] == 25
         assert result["total_pnl"] == 30 + 25
         assert result["total_pnl"] == 55
+
+    def test_summary_new_empty_strategy_does_not_override_account(self):
+        """新建无成交策略的全零快照不得覆盖账户已有累计值。"""
+        base = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        records = [
+            # 新策略全零（更新）
+            PnlRecord(
+                id=3, account_id=1, strategy_instance_id=99, equity=0,
+                unrealized_pnl=0, realized_pnl=0, total_pnl=0,
+                net_position=0, order_count=0,
+                is_final=False, recorded_at=base + timedelta(seconds=20),
+            ),
+            # 老策略有效
+            PnlRecord(
+                id=2, account_id=1, strategy_instance_id=10, equity=1000,
+                unrealized_pnl=25, realized_pnl=30, total_pnl=55,
+                net_position=1, order_count=2,
+                is_final=False, recorded_at=base + timedelta(seconds=10),
+            ),
+        ]
+        mock_db = self._make_mock_db(records)
+        result = get_pnl_summary(account_id=None, strategy_instance_id=None, db=mock_db, user=MagicMock())
+        assert result["total_realized_pnl"] == 30
+        assert result["total_unrealized_pnl"] == 25
+        assert result["total_pnl"] == 55
+        assert result["latest_equity"] == 1000
 
 
 # ===========================================================================

@@ -142,6 +142,106 @@ class GridStrategy(BaseStrategy):
             return False
         return True
 
+    @staticmethod
+    def _parse_single_order_response(response: dict) -> tuple[str | None, str | None]:
+        """校验 OKX 单笔下单响应，返回 (ordId, error)。"""
+        if not isinstance(response, dict):
+            return None, "OKX 返回格式无效"
+        data = response.get("data")
+        item = data[0] if isinstance(data, list) and data and isinstance(data[0], dict) else {}
+        code = str(response.get("code", ""))
+        sub_code = str(item.get("sCode", ""))
+        if code != "0" or sub_code != "0":
+            return None, (
+                f"OKX code={code or 'missing'} msg={response.get('msg', '')} "
+                f"sCode={sub_code or 'missing'} sMsg={item.get('sMsg', '')}"
+            )
+        order_id = str(item.get("ordId", "")).strip()
+        if not order_id:
+            return None, "OKX 下单成功响应缺少 ordId"
+        return order_id, None
+
+    def _disable_demo_test_order(self):
+        """一次性测试单被接受后自动关闭开关并持久化，防止重启重复下单。"""
+        from models.strategy import StrategyInstance
+
+        updated_params = dict(self.params)
+        updated_params["demo_test_order_on_start"] = False
+        self.params = updated_params
+        db = self.db_session_factory()
+        try:
+            instance = db.query(StrategyInstance).filter(
+                StrategyInstance.id == self.instance_id
+            ).first()
+            if instance:
+                instance.params = updated_params
+                db.commit()
+        finally:
+            db.close()
+
+    async def _place_demo_test_order(
+        self,
+        symbol: str,
+        current_price: float,
+        order_qty: float,
+    ):
+        """仅在模拟盘启动一次小额市价买单，便于验证成交、PnL 与补单链路。"""
+        if not bool(self.params.get("demo_test_order_on_start", False)):
+            return
+        if str(getattr(self.client, "trade_mode", "")) != "demo":
+            self._record_event(
+                "test_order_blocked",
+                "一次性测试入场单仅允许在 OKX 模拟盘执行",
+                {"symbol": symbol},
+            )
+            return
+        if "-SWAP" in symbol:
+            self._record_event(
+                "test_order_blocked",
+                "网格一次性测试入场单当前仅支持现货交易对",
+                {"symbol": symbol},
+            )
+            return
+
+        response = await self.client.place_order(
+            inst_id=symbol,
+            side="buy",
+            ord_type="market",
+            sz=str(order_qty),
+            tgt_ccy="base_ccy",
+        )
+        order_id, error = self._parse_single_order_response(response)
+        if error:
+            self._record_event(
+                "order_rejected",
+                f"模拟盘一次性测试买单失败: {symbol} qty={order_qty}; {error}",
+                {"symbol": symbol, "quantity": order_qty, "response": response},
+            )
+            raise RuntimeError(error)
+
+        cl_ord_id = self._extract_cl_ord_id(response)
+        await self.record_order(
+            symbol,
+            "buy",
+            "market",
+            current_price,
+            order_qty,
+            order_id=order_id,
+            status="live",
+            cl_ord_id=cl_ord_id,
+        )
+        self._disable_demo_test_order()
+        self._record_event(
+            "test_order_placed",
+            f"模拟盘一次性测试买单已提交: {symbol} qty={order_qty} ordId={order_id}",
+            {
+                "symbol": symbol,
+                "quantity": order_qty,
+                "order_id": order_id,
+                "reference_price": current_price,
+            },
+        )
+
     def _find_grid_index(self, px: float) -> int | None:
         """Bug 3: 精确档位索引匹配，容差作为兜底。
 
@@ -389,8 +489,12 @@ class GridStrategy(BaseStrategy):
                         data = resp.get("data", [])
                         if j < len(data) and data[j].get("sCode") == "0":
                             order_id = data[j].get("ordId", "")
+                            cl_ord_id = data[j].get("clOrdId", "") or ""
                             self._active_buy_orders[o["idx"]] = order_id
-                            await self.record_order(symbol, "buy", "limit", o["level"], order_qty, order_id=order_id, status="live")
+                            await self.record_order(
+                                symbol, "buy", "limit", o["level"], order_qty,
+                                order_id=order_id, status="live", cl_ord_id=cl_ord_id,
+                            )
                         else:
                             s_code = data[j].get("sCode", "") if j < len(data) else ""
                             s_msg = data[j].get("sMsg", "") if j < len(data) else ""
@@ -418,8 +522,12 @@ class GridStrategy(BaseStrategy):
                         data = resp.get("data", [])
                         if j < len(data) and data[j].get("sCode") == "0":
                             order_id = data[j].get("ordId", "")
+                            cl_ord_id = data[j].get("clOrdId", "") or ""
                             self._active_sell_orders[o["idx"]] = order_id
-                            await self.record_order(symbol, "sell", "limit", o["level"], order_qty, order_id=order_id, status="live")
+                            await self.record_order(
+                                symbol, "sell", "limit", o["level"], order_qty,
+                                order_id=order_id, status="live", cl_ord_id=cl_ord_id,
+                            )
                         else:
                             s_code = data[j].get("sCode", "") if j < len(data) else ""
                             s_msg = data[j].get("sMsg", "") if j < len(data) else ""
@@ -687,6 +795,9 @@ class GridStrategy(BaseStrategy):
 
             # 批量下初始网格订单（SubTask 8.3: 提取为可复用方法 _place_grid_orders）
             await self._place_grid_orders(symbol, current_price, grid_levels)
+            # 初始网格登记完成后再发一次性测试单，使快速成交回调能够识别
+            # 已存在的相邻档位，避免并发补出重复订单。
+            await self._place_demo_test_order(symbol, current_price, order_qty)
         except Exception as e:
             print(f"[GridStrategy] execute error: {e}\n{traceback.format_exc()}")
             self._record_event("error", f"策略执行异常: {e}", {"traceback": traceback.format_exc()})

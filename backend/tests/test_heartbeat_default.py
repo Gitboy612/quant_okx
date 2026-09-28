@@ -64,15 +64,14 @@ def _make_heartbeat_mock_db(instance=None, latest_pnl=None, orders=None):
 
 
 # ===========================================================================
-# 1. 无基准 PnlRecord 且无成交订单 → 写全零初始心跳
+# 1. 无基准 PnlRecord 且无成交订单 → 返回内存零快照，不落库
 # ===========================================================================
 class TestHeartbeatNoBaselineNoOrders:
     @pytest.mark.asyncio
     async def test_heartbeat_no_baseline_no_orders_writes_zero(self):
-        """无基准 PnlRecord 且无成交订单时，heartbeat_snapshot 写一条全零初始心跳。
+        """无基准 PnlRecord 且无成交订单时，heartbeat_snapshot 返回内存零快照且不写库。
 
-        修复前：recompute 返回 None 时 heartbeat 也返回 None，不写记录。
-        修复后：用全零默认值写一条心跳，确保盈亏曲线有持续数据点。
+        P0：新建策略零基线——无成交不写入全零 PnlRecord，避免污染曲线与账户汇总。
         """
         instance = _make_instance(account_id=1, symbol="BTC-USDT")
         mock_db = _make_heartbeat_mock_db(instance=instance, latest_pnl=None, orders=[])
@@ -93,9 +92,9 @@ class TestHeartbeatNoBaselineNoOrders:
         assert snapshot.total_fee == pytest.approx(0.0, abs=1e-12)
         assert snapshot.order_count == 0
         assert snapshot.equity == pytest.approx(0.0, abs=1e-12)
-        # 写入一条 PnlRecord 并提交
-        mock_db.add.assert_called_once()
-        mock_db.commit.assert_called_once()
+        # 不写入 PnlRecord
+        mock_db.add.assert_not_called()
+        mock_db.commit.assert_not_called()
 
 
 # ===========================================================================

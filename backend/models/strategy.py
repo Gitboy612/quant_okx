@@ -31,6 +31,8 @@ class StrategyInstance(Base):
     market_type = Column(String, nullable=False)
     params = Column(JSON, nullable=False)
     status = Column(String, default="stopped")
+    # 期望状态（用户意图）；与 status/runtime 分离，避免 DB 直接改状态被当成真实运行态
+    desired_status = Column(String, default="stopped")
     started_at = Column(DateTime, nullable=True)
     stopped_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))

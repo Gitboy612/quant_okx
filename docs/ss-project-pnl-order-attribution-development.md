@@ -164,4 +164,14 @@ account_total_pnl      = account_realized_pnl + account_unrealized_pnl
 
 ## 6. 当前验证状态
 
-最近一次本地完整测试结果为 843 项通过、4 项跳过、12 项失败、4 项收集错误。失败集中在 PnL 增量/性能、研究功能检查和运行迭代逻辑；收集错误来自依赖 `runner` fixture 的 OKX 接口脚本。专项验收完成前，不应把“服务可启动”解释为“PnL 与恢复业务逻辑已完全通过”。
+P0（2026-09-28）已落地代码：
+
+1. `get_pnl_summary` 账户总盈亏 = `sum(latest_by_strategy)`。
+2. 无成交心跳不再写全零 `PnlRecord`。
+3. `clOrdId` 生成/透传/超时对账与订单去重。
+4. `compose_total_pnl` 统一 total 口径。
+5. `desired_status` + 启动 `recovering` 对账；列表暴露 runtime/drift。
+
+相关单测见 `backend/tests/test_pnl_order_recovery_p0.py` 及 summary/heartbeat 配套用例。
+
+历史基线：最近一次本地完整测试结果为 843 项通过、4 项跳过、12 项失败、4 项收集错误。失败集中在 PnL 增量/性能、研究功能检查和运行迭代逻辑；收集错误来自依赖 `runner` fixture 的 OKX 接口脚本。专项验收完成前，不应把“服务可启动”解释为“PnL 与恢复业务逻辑已完全通过”。

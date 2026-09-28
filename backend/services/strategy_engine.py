@@ -104,10 +104,15 @@ class StrategyEngine:
             instance = db.query(StrategyInstance).filter(
                 StrategyInstance.id == instance_id
             ).first()
-            if instance and instance.status in ("running", "paused"):
+            if instance and instance.status in ("running", "paused", "recovering"):
                 instance.status = "error" if error else "stopped"
                 if error is None:
                     instance.stopped_at = datetime.now(timezone.utc)
+                    # 仅当 desired 为字符串且仍为 running/paused 时保留意图；
+                    # MagicMock 自动属性或其他类型视为无明确意图，回写 stopped。
+                    desired = getattr(instance, "desired_status", None)
+                    if not isinstance(desired, str) or desired in ("", "stopped"):
+                        instance.desired_status = "stopped"
                 db.commit()
         finally:
             db.close()
@@ -216,7 +221,10 @@ class StrategyEngine:
         try:
             instances = (
                 db.query(StrategyInstance)
-                .filter(StrategyInstance.status == "running")
+                .filter(
+                    (StrategyInstance.status.in_(["running", "paused", "recovering"]))
+                    | (StrategyInstance.desired_status.in_(["running", "paused"]))
+                )
                 .all()
             )
             instance_ids = [inst.id for inst in instances]
@@ -490,6 +498,7 @@ class StrategyEngine:
                 raise HTTPException(status_code=500, detail=f"策略启动失败: {e}")
 
             instance.status = "running"
+            instance.desired_status = "running"
             instance.started_at = datetime.now(timezone.utc)
             db.commit()
 
@@ -527,6 +536,7 @@ class StrategyEngine:
             instance = db.query(StrategyInstance).filter(StrategyInstance.id == instance_id).first()
             if instance:
                 instance.status = "paused"
+                instance.desired_status = "paused"
                 db.commit()
         finally:
             db.close()
@@ -542,6 +552,7 @@ class StrategyEngine:
             instance = db.query(StrategyInstance).filter(StrategyInstance.id == instance_id).first()
             if instance:
                 instance.status = "running"
+                instance.desired_status = "running"
                 db.commit()
         finally:
             db.close()
@@ -569,6 +580,7 @@ class StrategyEngine:
             instance = db.query(StrategyInstance).filter(StrategyInstance.id == instance_id).first()
             if instance:
                 instance.status = "stopped"
+                instance.desired_status = "stopped"
                 instance.stopped_at = datetime.now(timezone.utc)
                 db.commit()
         finally:
@@ -624,6 +636,122 @@ class StrategyEngine:
         finally:
             db.close()
 
+    def get_runtime_status(self, instance_id: int) -> str:
+        """真实运行态：基于内存任务，不把 DB status 当作 runtime。"""
+        entry = self._get_live_task_entry(instance_id)
+        if entry is None:
+            return "stopped"
+        strategy = entry[1]
+        if getattr(strategy, "is_paused", False):
+            return "paused"
+        if getattr(strategy, "is_running", True):
+            return "running"
+        return "stopped"
+
+    def get_status_view(self, instance_id: int, desired_status: str | None = None, db_status: str | None = None) -> dict:
+        """返回 desired / runtime / drift，供列表与详情接口使用。"""
+        runtime = self.get_runtime_status(instance_id)
+        desired = desired_status or "stopped"
+        persisted = db_status or desired
+        drift = desired in ("running", "paused") and runtime != desired
+        effective = persisted
+        if drift and persisted not in ("recovering", "degraded", "error"):
+            effective = "degraded"
+        return {
+            "status": effective,
+            "desired_status": desired,
+            "runtime_status": runtime,
+            "status_drift": drift,
+            "task_alive": self._get_live_task_entry(instance_id) is not None,
+        }
+
+    async def recover_orphaned_instances(self) -> list[dict]:
+        """服务启动恢复：保留 desired_status，标记 recovering，并对账孤儿订单/PnL。
+
+        不自动重启执行任务（避免在未确认网络与挂单时直接变 running）。
+        """
+        db = SessionLocal()
+        results = []
+        try:
+            candidates = (
+                db.query(StrategyInstance)
+                .filter(
+                    (StrategyInstance.desired_status.in_(["running", "paused"]))
+                    | (StrategyInstance.status.in_(["running", "paused", "recovering"]))
+                )
+                .all()
+            )
+            # 兼容旧库：desired_status 为空时用 status 回填
+            for inst in candidates:
+                if not getattr(inst, "desired_status", None):
+                    inst.desired_status = inst.status if inst.status in ("running", "paused") else "stopped"
+                if inst.desired_status in ("running", "paused"):
+                    inst.status = "recovering"
+            if candidates:
+                db.commit()
+
+            try:
+                await self.rebuild_pnl_baselines()
+            except Exception as e:
+                logger.error(f"recover_orphaned_instances rebuild_pnl_baselines: {e}")
+
+            from services.pnl_accounting_engine import pnl_accounting_engine
+
+            seen_pairs = set()
+            for inst in candidates:
+                pair = (inst.account_id, inst.symbol)
+                reconcile_result = None
+                if pair not in seen_pairs and inst.desired_status in ("running", "paused"):
+                    seen_pairs.add(pair)
+                    try:
+                        client = self._get_client_for_strategy(inst.id)
+                        reconcile_result = await pnl_accounting_engine.reconcile_orphan_orders(
+                            inst.account_id, inst.symbol, client
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"recover orphan reconcile failed account={inst.account_id} "
+                            f"symbol={inst.symbol}: {e}"
+                        )
+                        inst.status = "degraded"
+                        db.commit()
+                        reconcile_result = {"error": str(e)}
+                results.append({
+                    "strategy_instance_id": inst.id,
+                    "desired_status": inst.desired_status,
+                    "status": inst.status,
+                    "reconcile": reconcile_result,
+                })
+                self._record_recovery_event(inst.id, inst.status, reconcile_result)
+            return results
+        finally:
+            db.close()
+
+    def _record_recovery_event(self, instance_id: int, status: str, reconcile_result):
+        try:
+            db = SessionLocal()
+            try:
+                from models.strategy_event import StrategyEvent
+                import json
+                event = StrategyEvent(
+                    strategy_instance_id=instance_id,
+                    event_type="strategy_recovery",
+                    message=f"启动恢复完成 status={status}",
+                    details=json.dumps({
+                        "status": status,
+                        "reconcile": reconcile_result,
+                    }, ensure_ascii=False, default=str),
+                    created_at=datetime.now(timezone.utc),
+                )
+                db.add(event)
+                db.commit()
+            except Exception:
+                db.rollback()
+            finally:
+                db.close()
+        except Exception:
+            pass
+
     def get_running_ids(self) -> list[int]:
         return [iid for iid, (task, _) in self._tasks.items() if not task.done()]
 
@@ -645,6 +773,7 @@ class StrategyEngine:
                         "grid_count": {"label": "网格数量", "type": "number", "default": 10, "min": 2, "max": 200, "step": 1, "hint": "区间内布设的网格线条数，越多越密集"},
                         "order_qty": {"label": "单格交易量", "type": "number", "default": 0.01, "min": 0.0001, "step": 0.001, "hint": "每触及一格买卖的币数量"},
                         "symbol": {"label": "交易对", "type": "select", "default": "BTC-USDT", "options": ["BTC-USDT", "ETH-USDT", "SOL-USDT", "BNB-USDT", "BTC-USDT-SWAP", "ETH-USDT-SWAP", "SOL-USDT-SWAP"]},
+                        "demo_test_order_on_start": {"label": "模拟盘启动时测试一笔买单", "type": "boolean", "default": False, "hint": "仅模拟盘有效；订单被接受后自动关闭，防止策略重启时重复下单"},
                     },
                     is_builtin=True,
                 ),
@@ -661,16 +790,18 @@ class StrategyEngine:
                         "poll_interval": 60,
                         "enter_on_start": False,
                         "closed_candle_only": True,
+                        "long_only": False,
                     },
                     param_schema={
                         "fast_ma_period": {"label": "快线周期", "type": "number", "default": 5, "min": 2, "max": 50, "step": 1, "hint": "快速均线计算周期，越小越灵敏"},
-                        "slow_ma_period": {"label": "慢线周期", "type": "number", "default": 20, "min": 5, "max": 200, "step": 1, "hint": "慢速均线计算周期，越大越稳定"},
+                        "slow_ma_period": {"label": "慢线周期", "type": "number", "default": 20, "min": 3, "max": 200, "step": 1, "hint": "慢速均线计算周期，越大越稳定"},
                         "order_qty": {"label": "单笔交易量", "type": "number", "default": 0.01, "min": 0.0001, "step": 0.001, "hint": "每次信号触发时的交易数量"},
                         "symbol": {"label": "交易对", "type": "select", "default": "BTC-USDT-SWAP", "options": ["BTC-USDT-SWAP", "ETH-USDT-SWAP", "SOL-USDT-SWAP"]},
                         "bar": {"label": "K线周期", "type": "select", "default": "5m", "options": ["1m", "3m", "5m", "15m", "30m", "1H"], "hint": "周期越短，信号通常越频繁，噪声也越多"},
                         "poll_interval": {"label": "行情轮询间隔（秒）", "type": "number", "default": 60, "min": 5, "max": 300, "step": 5, "hint": "只处理新的已完成K线；轮询越快越及时"},
                         "enter_on_start": {"label": "启动时按当前趋势入场", "type": "boolean", "default": False, "hint": "无虚拟持仓时，启动后不等待下一次均线交叉，直接按当前均线方向下单一次"},
                         "closed_candle_only": {"label": "仅使用已完成K线", "type": "boolean", "default": True, "hint": "避免未收盘K线反复变化导致虚假信号"},
+                        "long_only": {"label": "仅做多", "type": "boolean", "default": False, "hint": "空仓时跳过做空信号；适用于当前仅支持多头 FIFO 的策略级盈亏测试"},
                     },
                     is_builtin=True,
                 ),
