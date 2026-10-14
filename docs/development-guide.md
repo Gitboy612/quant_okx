@@ -89,7 +89,7 @@ quant_okx/
 │   ├── services/               # 交易、核算、回测、通知、代理等服务
 │   ├── strategies/             # 内置策略实现
 │   ├── dsl/                    # QS-Model/DSL schema、校验、编译和执行
-│   ├── research/               # QS-Model 研究与基因池生成
+│   ├── research/               # QS-Model 生成器、研究与审计任务（jobs/）
 │   ├── migrations/             # 独立历史迁移/修复脚本
 │   └── tests/                  # 单元、集成、E2E、性能测试
 ├── frontend/
@@ -127,7 +127,7 @@ quant_okx/
 | 沙箱 | `services/sandbox_service.py` | 真实行情+Mock 写操作、内存结果 | ComposableStrategy |
 | 市场数据 | `services/market_data_service.py` | 公共 WS 订阅、最新价和波动缓存 | OKXPublicWsClient |
 | 通知 | `services/notification_service.py` | 邮件、Webhook、Telegram 分发 | notification_rules |
-| 代理 | `services/proxy_service.py`、`proxy_core.py` | 配置导入、连通性、Mihomo 进程 | system_settings、文件系统 |
+| 代理 | `services/proxy_config_service.py`、`proxy_runtime.py` | 配置导入、连通性、Mihomo 进程 | system_settings、文件系统 |
 | 前端 | `frontend/src/App.tsx` | 登录保护与 11 个业务页面路由 | Axios、React Router |
 | 桌面桥接 | `desktop/qml_bridge.py` | QML 直接读 SQLAlchemy 和调用认证服务 | backend models/services |
 
@@ -256,7 +256,7 @@ async def place_order(
 | 规则 | 实现位置 |
 |---|---|
 | 策略状态为 `stopped → running → paused/running → stopped`；异常任务写 `error` | `routers/strategies.py`、`services/strategy_engine.py` |
-| 服务启动时把数据库中的 `running`/`paused` 实例重置为 `stopped`，并尝试重建 PnL 基准 | `backend/main.py` |
+| 服务启动时尝试对账并恢复残留实例；恢复异常时标记为 `recovering`，保留 `desired_status` | `backend/main.py`、`StrategyEngine.recover_orphaned_instances` |
 | 启动前执行账户、余额、网格和账户模式等可行性检查 | `StrategyEngine.check_feasibility` |
 | QS-Model `meta.base_symbol` 非空时覆盖创建实例请求中的 `symbol` | `routers/strategies.py:create_instance` |
 | 模板 `logic` 规范化 JSON 后取 SHA-256；重复逻辑默认仅返回提示，`force=true` 才创建 | `routers/strategies.py` |
@@ -441,8 +441,7 @@ async def place_order(
 
 | 文档内容 | 实际代码 | 影响 | 建议处理 |
 |---|---|---|---|
-| README 通用要求 Node 18+ | Vite 8 本次提示需 Node 20.19+ 或 22.12+；macOS 脚本要求 22.12+ | 旧 Node 构建不受支持 | README 统一为 22.12+ |
-| `backend/requirements.txt` 看似完整 | 代码/安装脚本还使用 `aiosqlite`、`python-dotenv`、`PyYAML`，测试需 pytest | 手动安装可能启动失败 | 补充并锁定依赖 |
+| 后端依赖仅设最低版本 | 不同安装时间可能得到不同版本；测试工具仍需单独安装 | 重现测试结果较难 | 增加锁文件或固定发布版本 |
 | README 说默认 `pytest.ini` 排除 E2E | 正确，但 `tests/perf` 未排除，默认命令会运行性能测试 | 默认套件受性能断言影响 | 明确 marker 选择或调整配置 |
 | OpenAPI 仅显示 15 个 schema | 多数路由请求/响应使用裸 `dict` | API 文档契约不完整 | 为路由补 response/request model |
 | README 中项目主要为可信单用户本地环境 | 安装文档提供公网暴露方式 | 安全控制不足时风险高 | 对公网部署增加硬化清单或删除简化指引 |

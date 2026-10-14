@@ -125,7 +125,8 @@ erDiagram
 | `symbol` | VARCHAR | 否 | 无 |  | 如 `BTC-USDT-SWAP` |
 | `market_type` | VARCHAR | 否 | 无 |  | `spot`/`swap`，无 DB CHECK |
 | `params` | JSON | 否 | 无 |  | 合并后的运行参数 |
-| `status` | VARCHAR | 是 | `stopped` |  | running/paused/stopped/error |
+| `status` | VARCHAR | 是 | `stopped` |  | running/paused/recovering/stopped/error |
+| `desired_status` | VARCHAR | 是 | `stopped` |  | 用户期望状态；用于重启恢复 |
 | `started_at` | DATETIME | 是 | null |  | 最近启动时间 |
 | `stopped_at` | DATETIME | 是 | null |  | 最近停止时间 |
 | `created_at` | DATETIME | 是 | UTC now |  | 创建时间 |

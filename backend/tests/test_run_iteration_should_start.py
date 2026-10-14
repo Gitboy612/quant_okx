@@ -1,9 +1,9 @@
-"""Task 9: run_iteration.py should_start 分支测试。
+"""Task 9: strategy_iteration.py should_start 分支测试。
 
 测试用例：
 1. test_research_type_rotation: N=0,1,2,3 分别调用对应生成器（mock 生成器）
 2. test_validate_failure_skips: validate 失败时跳过并记录日志
-3. test_dry_run_failure_skips: dry-run 夏普<0 时跳过
+3. test_dry_run_failure_skips: 有权益指标且不达标时跳过
 4. test_successful_creates_and_starts: 全流程通过时创建 StrategyTemplate + StrategyInstance 并启动
 5. test_failure_records_to_log: 失败时记录到 execution.log
 
@@ -18,9 +18,7 @@ from pathlib import Path
 _BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _BACKEND_DIR)
 
-# 注入 run_iteration.py 所在目录（脚本而非包）
-_SCRIPT_DIR = os.path.join(_BACKEND_DIR, "tests", "reports", "strategy_research")
-sys.path.insert(0, _SCRIPT_DIR)
+# 研究任务作为 research.jobs 包导入。
 
 import pytest
 
@@ -32,7 +30,7 @@ from research.qsm_generator import (
     generate_ab_variants,
 )
 
-import run_iteration
+from research.jobs import strategy_iteration as run_iteration
 
 
 # ============================================================
@@ -149,9 +147,7 @@ async def test_research_type_rotation(redirect_log):
              patch.object(run_iteration, "generate_backtest_candidates", return_value=valid_candidates) as m_backtest, \
              patch.object(run_iteration, "generate_ab_variants", return_value=[valid_qsm]) as m_ab, \
              patch.object(run_iteration, "SessionLocal", return_value=_make_mock_db_session()), \
-             patch.object(run_iteration, "strategy_engine") as m_engine:
-
-            m_engine.start_strategy = AsyncMock()
+             patch.object(run_iteration, "_start_strategy_via_api", new_callable=AsyncMock, return_value=True) as m_start:
 
             result = await run_iteration._run_should_start_branch(
                 execution_count=n * 12,
@@ -173,6 +169,7 @@ async def test_research_type_rotation(redirect_log):
             # 验证成功启动
             assert result["started"] is True, f"N={n} 启动失败: {result}"
             assert result["research_type"] == n
+            m_start.assert_awaited_once()
 
 
 # ============================================================
@@ -214,14 +211,16 @@ async def test_validate_failure_skips(redirect_log):
 
 @pytest.mark.asyncio
 async def test_dry_run_failure_skips(redirect_log):
-    """dry-run 夏普<0（价格持续下跌）时跳过。"""
-    # 构造价格持续下跌的 steps（夏普<0，总收益为负）
+    """有策略权益指标且夏普不达标时跳过。"""
+    # 价格下跌本身不能代表策略亏损；显式模拟权益指标不达标。
     bad_steps = [{"price": 200.0 - i * 1.0} for i in range(100)]
     http_client = _make_mock_http_client(validate_valid=True, dry_run_steps=bad_steps)
 
     with patch.object(run_iteration, "SessionLocal", return_value=_make_mock_db_session()), \
-         patch.object(run_iteration, "strategy_engine") as m_engine:
-        m_engine.start_strategy = AsyncMock()
+         patch.object(run_iteration, "_compute_dry_run_metrics", return_value={
+             "sharpe": -1.0, "max_drawdown": 0.0, "total_return": -0.1,
+         }), \
+         patch.object(run_iteration, "_start_strategy_via_api", new_callable=AsyncMock) as m_start:
 
         result = await run_iteration._run_should_start_branch(
             execution_count=0,
@@ -234,7 +233,7 @@ async def test_dry_run_failure_skips(redirect_log):
     assert result["started"] is False
     assert result["reason"] == "METRICS_UNQUALIFIED"
     # 验证未启动策略
-    m_engine.start_strategy.assert_not_called()
+    m_start.assert_not_awaited()
     # 验证日志记录了指标不达标
     log_content = redirect_log.read_text(encoding="utf-8")
     assert "METRICS_UNQUALIFIED" in log_content
@@ -263,8 +262,7 @@ async def test_successful_creates_and_starts(redirect_log):
     mock_session.add = _track_add
 
     with patch.object(run_iteration, "SessionLocal", return_value=mock_session), \
-         patch.object(run_iteration, "strategy_engine") as m_engine:
-        m_engine.start_strategy = AsyncMock()
+         patch.object(run_iteration, "_start_strategy_via_api", new_callable=AsyncMock, return_value=True) as m_start:
 
         result = await run_iteration._run_should_start_branch(
             execution_count=12,
@@ -276,7 +274,7 @@ async def test_successful_creates_and_starts(redirect_log):
     # 验证成功
     assert result["started"] is True
     assert result["reason"] == "OK"
-    assert result["symbol"] == "BTC-USDT"
+    assert result["symbol"] == "BTC-USDT-SWAP"
 
     # 验证创建了 StrategyTemplate 和 StrategyInstance
     from models.strategy import StrategyTemplate, StrategyInstance
@@ -293,14 +291,14 @@ async def test_successful_creates_and_starts(redirect_log):
 
     # 验证 Instance 属性
     inst = instances[0]
-    assert inst.symbol == "BTC-USDT"
-    assert inst.market_type == "spot"
+    assert inst.symbol == "BTC-USDT-SWAP"
+    assert inst.market_type == "swap"
     assert inst.params["qs_model_config"] is not None
     assert inst.params["investment_amount"] == 100.0
     assert inst.logic_hash is not None
 
-    # 验证调用了 start_strategy
-    m_engine.start_strategy.assert_called_once()
+    # 验证通过后端 API 启动，而非在研究任务进程中启动
+    m_start.assert_awaited_once_with(inst.id, http_client)
     # 验证日志记录了成功
     log_content = redirect_log.read_text(encoding="utf-8")
     assert "策略已创建并启动" in log_content

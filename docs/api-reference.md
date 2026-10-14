@@ -180,9 +180,9 @@ PnL 列表使用 `limit` 而非 offset/cursor；`summary` 取最近有效快照�
 | `GET /api/settings/proxy` | 是 | 无 | 代理设置与解析节点 | 配置解析异常由服务处理 | `get_proxy_settings_route` |
 | `PUT /api/settings/proxy` | 是 | `proxy_enabled,proxy_url,proxy_config_path,proxy_embedded_port` | `message` | 值转为字符串 | `save_proxy_settings_route` |
 | `POST /api/settings/proxy/test` | 是 | 可选 `proxy_url` | google/github/okx 连通性 | 网络超时按结果返回 | `test_proxy_route` |
-| `GET /api/settings/proxy/status` | 是 | 无 | status/port/pid/uptime/connectivity | 401 | `get_proxy_core_status` |
-| `POST /api/settings/proxy/start` | 是 | 可选 `config_path,port,bootstrap_proxy` | 进程启动结果 | 文件/端口/下载问题以服务结果返回 | `start_proxy_core` |
-| `POST /api/settings/proxy/stop` | 是 | 无 | 停止结果 | 401 | `stop_proxy_core` |
+| `GET /api/settings/proxy/status` | 是 | 无 | status/port/pid/uptime/connectivity | 401 | `get_proxy_runtime_status` |
+| `POST /api/settings/proxy/start` | 是 | 可选 `config_path,port,bootstrap_proxy` | 进程启动结果 | 文件/端口/下载问题以服务结果返回 | `start_proxy_runtime` |
+| `POST /api/settings/proxy/stop` | 是 | 无 | 停止结果 | 401 | `stop_proxy_runtime` |
 | `GET /api/settings/proxy/log` | 是 | 无 | Mihomo 日志尾部 | 401 | `get_proxy_log_route` |
 | `GET /api/settings/proxy/mmdb-status` | 是 | 无 | MMDB 文件状态 | 401 | `get_mmdb_status_route` |
 | `POST /api/settings/proxy/config/import` | 是 | multipart `file` 必填 | 节点/保存结果 | 400 编码或 YAML；422 无文件 | `import_proxy_config` |

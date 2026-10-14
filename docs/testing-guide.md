@@ -9,7 +9,7 @@
 | API/集成 | `test_dsl_api.py` 等 | FastAPI TestClient | 本地应用/测试 DB |
 | E2E | `backend/tests/e2e/` | `tests/run_e2e_tests.py` | OKX demo，可能改变账户状态 |
 | 性能 | `backend/tests/perf/` | pytest marker `perf` | 时间阈值，对机器负载敏感 |
-| 研究/审计 | 多个 `test_*runner*`、reports | pytest/脚本 | 文件输出被 fixture 重定向 |
+| 研究/审计 | `backend/research/jobs/`、`backend/tests/test_*runner*.py` | pytest/脚本 | 运行报告写入 `data/research/`；测试输出被 fixture 重定向 |
 | 前端静态检查 | `frontend/` | Oxlint | node_modules |
 | 前端类型/构建 | `frontend/` | `tsc -b`、Vite | Node 版本与前端资源 |
 
@@ -23,7 +23,7 @@ source .venv/bin/activate
 python -m pip install pytest pytest-asyncio
 ```
 
-安装脚本还会安装 `aiosqlite`、`python-dotenv` 和 `PyYAML`。测试应使用临时 DB、mock 或专用 OKX demo 账户，绝不能使用实盘凭证。
+`backend/requirements.txt` 已包含 `aiosqlite`、`python-dotenv` 和 `PyYAML`；安装脚本也会安装测试工具。测试应使用临时 DB、mock 或专用 OKX demo 账户，绝不能使用实盘凭证。
 
 ## 3. 推荐执行命令
 

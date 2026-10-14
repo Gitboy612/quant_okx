@@ -5,7 +5,7 @@
 | 组件 | 代码/脚本要求 | 建议基线 |
 |---|---|---|
 | Python | 3.10+ | 3.11 或 3.12 |
-| Node.js | README/Windows 脚本 18+；macOS 脚本和 Vite 8 实际要求更高 | 22.12+ |
+| Node.js | Web 前端和安装脚本要求 22.12+ | 22.12+ |
 | npm | 随 Node 安装 | 与 Node 22 LTS 配套 |
 | Windows | 10/11、VC++ 2015–2022 x64；打包需 Inno Setup 6 | Windows 11 |
 | macOS | Xcode Command Line Tools；可选 Homebrew | 当前受支持 macOS |
@@ -28,7 +28,7 @@ chmod +x install_mac.sh start_mac.sh
 install.bat
 ```
 
-脚本检查/尝试安装 Python、Node、VC++ runtime，创建 `backend\.venv`，安装依赖和生成 `.env`。脚本说明是 Node 18+，但当前 Vite 8 应使用 Node 22.12+。
+脚本检查/尝试安装 Python、Node、VC++ runtime，创建 `backend\.venv`，安装依赖和生成 `.env`。脚本要求 Node 22.12+。
 
 ### 手工安装
 
@@ -39,15 +39,15 @@ cp .env.example .env
 python3 -m venv backend/.venv
 source backend/.venv/bin/activate
 python -m pip install --upgrade pip setuptools wheel
-python -m pip install -r backend/requirements.txt aiosqlite python-dotenv PyYAML pytest pytest-asyncio
+python -m pip install -r backend/requirements.txt pytest pytest-asyncio
 cd frontend
-npm install
+npm install --include=optional
 cd ..
 ```
 
 Windows PowerShell 将复制命令改为 `Copy-Item .env.example .env`，激活命令改为 `backend\.venv\Scripts\Activate.ps1`。
 
-注意：`backend/requirements.txt` 当前没有列出 `aiosqlite`、`python-dotenv` 和 `PyYAML`，但代码/安装脚本使用它们，因此手工命令必须补充。生成 `.env` 后必须替换 `JWT_SECRET_KEY` 的占位值；不得提交 `.env`。
+`backend/requirements.txt` 已列出运行依赖；pytest 和 pytest-asyncio 是额外的测试依赖。生成 `.env` 后必须替换 `JWT_SECRET_KEY` 的占位值；不得提交 `.env`。
 
 ## 3. 数据库初始化与迁移
 
@@ -57,7 +57,7 @@ Windows PowerShell 将复制命令改为 `Copy-Item .env.example .env`，激活�
 2. 执行 `backend/database.py` 中的兼容迁移。
 3. 播种内置策略模板。
 4. 空用户表时创建默认管理员。
-5. 重建残留策略 PnL 基准并把 running/paused 改为 stopped。
+5. 尝试对账并恢复残留策略；恢复异常时将残留的 running/paused 标记为 recovering，并保留 desired_status。
 
 正式升级前先停服务并备份 `data/`。`backend/migrations/` 脚本不是统一迁移框架，只有在明确理解目标版本和脚本幂等性后才运行。
 
@@ -71,13 +71,15 @@ Windows PowerShell 将复制命令改为 `Copy-Item .env.example .env`，激活�
 
 它启动 Uvicorn reload 和 Vite，检测端口/就绪后打开浏览器。`Ctrl+C` 通过 trap 同时停止两个进程。
 
+`install_mac.sh` 负责环境准备，`start_mac.sh` 负责运行开发服务。两者均不会生成 macOS 安装包；前端静态资源由 `npm run build` 生成。
+
 ### Windows 一键启动
 
 ```bat
 start.bat
 ```
 
-它分别打开后端 `python launcher.py` 和前端 `npm run dev` 窗口；在各窗口停止进程。
+它使用 `backend/.venv` 中的 Python 启动 Uvicorn 开发服务，并在另一窗口运行 `npm run dev`；在各窗口停止进程。
 
 ### 手工启动
 

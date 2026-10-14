@@ -150,9 +150,6 @@ info "正在升级 pip、setuptools 和 wheel。"
 info "正在安装后端依赖。"
 "$VENV_PYTHON" -m pip install \
     -r "$BACKEND_DIR/requirements.txt" \
-    aiosqlite \
-    python-dotenv \
-    PyYAML \
     pytest \
     pytest-asyncio
 success "后端依赖安装完成。"

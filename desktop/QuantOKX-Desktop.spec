@@ -38,7 +38,7 @@ ICON_PATH = os.path.join(DESKTOP_DIR, 'resources', 'icons', 'app.ico')
 #    运行时 main.py 用 os.path.dirname(__file__)/qml 定位；frozen onedir 下
 #    __file__ 落在 _MEIPASS（= exe 所在目录），故 qml 平铺到 bundle 根的 qml/。
 # 2. app.ico -> resources/icons/ 托盘图标（main.py 查 <qml_dir>/resources/icons/app.ico）
-# 3. mihomo.exe -> bin/           嵌入式代理（复用 backend/bin；proxy_core.py frozen
+# 3. mihomo.exe -> bin/           嵌入式代理（复用 backend/bin；proxy_runtime.py frozen
 #    时按 _MEIPASS/bin/mihomo.exe 查找）
 datas = [
     (os.path.join(DESKTOP_DIR, 'qml'), 'qml'),

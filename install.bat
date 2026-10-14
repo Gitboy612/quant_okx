@@ -6,7 +6,7 @@ title QuantOKX 环境初始化脚本 (install.bat)
 REM ============================================================
 REM   QuantOKX - 全新 Windows 环境一键安装 / 前置检查脚本
 REM   在首次运行 start.bat 之前执行，完成：
-REM     1. 校验 / 安装 Python 3.10+ 和 Node.js 18+
+REM     1. 校验 / 安装 Python 3.10+ 和 Node.js 22.12+
 REM     2. 安装 Visual C++ 运行库（bcrypt/cryptography 等依赖需要）
 REM     3. 创建 Python 虚拟环境 venv
 REM     4. 安装后端 Python 依赖（含 aiosqlite、python-dotenv）
@@ -111,8 +111,8 @@ if defined PY_CMD (
 )
 echo.
 
-REM ---------- 3. Node.js 18+ ----------
-echo [3/8] 检查 Node.js 18+ ...
+REM ---------- 3. Node.js 22.12+ ----------
+echo [3/8] 检查 Node.js 22.12+ ...
 where node >nul 2>nul
 if errorlevel 1 (
     echo [缺失] 未检测到 Node.js。
@@ -132,14 +132,9 @@ if errorlevel 1 (
     )
 ) else (
     for /f "delims=" %%v in ('node -v 2^>nul') do set "NODE_VER_RAW=%%v"
-    set "NODE_VER=!NODE_VER_RAW:v=!"
-    for /f "tokens=1,2 delims=." %%a in ("!NODE_VER!") do (
-        set "NODE_MAJOR=%%a"
-        set "NODE_MINOR=%%b"
-    )
-    set /a NODE_NUM=!NODE_MAJOR!
-    if !NODE_NUM! LSS 18 (
-        echo [错误] Node.js 版本 !NODE_VER_RAW! 低于 18，请升级后重试。
+    node -e "const [major,minor]=process.versions.node.split('.').map(Number);process.exit(major>22||(major===22&&minor>=12)?0:1)"
+    if errorlevel 1 (
+        echo [错误] Node.js 版本 !NODE_VER_RAW! 低于 22.12，请升级后重试。
         set /a ERRORS+=1
     ) else (
         echo [完成] 检测到 Node.js !NODE_VER_RAW!。
@@ -222,15 +217,7 @@ if errorlevel 1 (
     goto :fatal
 )
 
-REM requirements.txt 缺失但代码引用的依赖（补丁）
-echo [补丁] 安装缺失依赖 aiosqlite / python-dotenv ...
-"!VENV_PIP!" install aiosqlite python-dotenv
-if errorlevel 1 (
-    echo [警告] aiosqlite / python-dotenv 安装失败，启动后端时可能报错。
-    set /a ERRORS+=1
-) else (
-    echo [完成] 后端 Python 依赖安装完成。
-)
+echo [完成] 后端 Python 依赖安装完成。
 echo.
 
 REM ---------- 7. 安装前端 npm 依赖 ----------
@@ -272,8 +259,6 @@ if not exist "!ROOT_DIR!\.env" (
 
 if exist "!BACKEND_DIR!\bin\mihomo.exe" (
     echo [完成] 内嵌代理 mihomo.exe 已就绪。
-) else if exist "!BACKEND_DIR!\bin\mihomo-windows-amd64-v3-go120.exe" (
-    echo [提示] 检测到 mihomo-windows-amd64-v3-go120.exe，建议重命名为 mihomo.exe。
 ) else (
     echo [警告] 未找到 backend\bin\mihomo.exe，嵌入式代理功能将不可用。
     echo        可手动下载 mihomo (Clash.Meta) 并放置到 backend\bin\mihomo.exe。

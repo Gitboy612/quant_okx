@@ -57,7 +57,7 @@ def save_settings(
 def get_proxy_settings_route(
     user: User = Depends(get_current_user),
 ):
-    from services.proxy_service import get_proxy_settings, get_proxy_settings_with_nodes
+    from services.proxy_config_service import get_proxy_settings, get_proxy_settings_with_nodes
     return get_proxy_settings_with_nodes()
 
 
@@ -66,7 +66,7 @@ def save_proxy_settings_route(
     body: dict,
     user: User = Depends(get_current_user),
 ):
-    from services.proxy_service import save_proxy_settings
+    from services.proxy_config_service import save_proxy_settings
     proxy_enabled = str(body.get("proxy_enabled", "false")).lower()
     proxy_url = str(body.get("proxy_url", ""))
     proxy_config_path = str(body.get("proxy_config_path", ""))
@@ -80,7 +80,7 @@ def test_proxy_route(
     body: dict | None = None,
     user: User = Depends(get_current_user),
 ):
-    from services.proxy_service import test_proxy, get_proxy_url
+    from services.proxy_config_service import test_proxy, get_proxy_url
     proxy_url = body.get("proxy_url") if body else None
     if proxy_url:
         result = test_proxy(proxy_url)
@@ -92,21 +92,21 @@ def test_proxy_route(
 # ========== Embedded Proxy Core Management ==========
 
 @router.get("/proxy/status")
-def get_proxy_core_status(
+def get_proxy_runtime_status(
     user: User = Depends(get_current_user),
 ):
     """Get embedded proxy core status."""
-    from services.proxy_core import get_proxy_status
+    from services.proxy_runtime import get_proxy_status
     return get_proxy_status()
 
 
 @router.post("/proxy/start")
-def start_proxy_core(
+def start_proxy_runtime(
     body: dict | None = None,
     user: User = Depends(get_current_user),
 ):
     """Start embedded proxy core."""
-    from services.proxy_core import start_proxy
+    from services.proxy_runtime import start_proxy
     config_path = body.get("config_path") if body else None
     port = int(body.get("port", 7890)) if body else 7890
     bootstrap_proxy = body.get("bootstrap_proxy") if body else None
@@ -115,11 +115,11 @@ def start_proxy_core(
 
 
 @router.post("/proxy/stop")
-def stop_proxy_core(
+def stop_proxy_runtime(
     user: User = Depends(get_current_user),
 ):
     """Stop embedded proxy core."""
-    from services.proxy_core import stop_proxy
+    from services.proxy_runtime import stop_proxy
     return stop_proxy()
 
 
@@ -128,7 +128,7 @@ def get_proxy_log_route(
     user: User = Depends(get_current_user),
 ):
     """Get mihomo log tail for diagnostics."""
-    from services.proxy_core import get_proxy_log
+    from services.proxy_runtime import get_proxy_log
     return get_proxy_log()
 
 
@@ -137,7 +137,7 @@ def get_mmdb_status_route(
     user: User = Depends(get_current_user),
 ):
     """Get MMDB file status for diagnostics."""
-    from services.proxy_core import _check_mmdb_ready
+    from services.proxy_runtime import _check_mmdb_ready
     return _check_mmdb_ready()
 
 
@@ -146,7 +146,7 @@ async def import_proxy_config(
     file: UploadFile = File(...),
     user: User = Depends(get_current_user),
 ):
-    from services.proxy_service import import_clash_config_from_content
+    from services.proxy_config_service import import_clash_config_from_content
     content = await file.read()
     # Save to config directory
     config_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
@@ -215,7 +215,7 @@ def import_sample_config_route(
     user: User = Depends(get_current_user),
 ):
     """Import a sample config file by path."""
-    from services.proxy_service import import_clash_config_from_content
+    from services.proxy_config_service import import_clash_config_from_content
     config_path = body.get("path", "")
     if not config_path or not os.path.exists(config_path):
         raise HTTPException(status_code=400, detail="配置文件不存在")

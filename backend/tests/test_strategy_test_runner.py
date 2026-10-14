@@ -1,4 +1,4 @@
-"""strategy_test_runner.py 单元测试。
+"""strategy_scenario_runner.py 单元测试。
 
 测试用例：
 1. test_generate_conditional_qsm_pause_on_high: pause_on_high 场景 QSModel 通过 schema validate
@@ -10,8 +10,7 @@
 7. test_verify_condition_triggers_rebalance: 模拟 rebalance_position 事件
 8. test_verify_condition_triggers_missing: 无事件时 triggered_correctly=False
 
-导入风格参考 test_run_iteration_should_start.py：sys.path 注入 backend 根目录 +
-脚本所在目录（strategy_test_runner.py 与 run_iteration.py 同为脚本而非包）。
+研究任务以 research.jobs 包形式导入。
 """
 import sys
 import os
@@ -22,9 +21,7 @@ from datetime import datetime, timezone
 _BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _BACKEND_DIR)
 
-# 注入 strategy_test_runner.py 所在目录（脚本而非包）
-_SCRIPT_DIR = os.path.join(_BACKEND_DIR, "tests", "reports", "strategy_research")
-sys.path.insert(0, _SCRIPT_DIR)
+# 研究任务作为 research.jobs 包导入。
 
 import pytest
 
@@ -33,8 +30,8 @@ from dsl.schema import QSModelConfig, resolve_variables
 from research.qsm_generator import validate_qsm
 
 # 测试目标模块
-import strategy_test_runner
-import run_iteration
+from research.jobs import strategy_scenario_runner as strategy_test_runner
+from research.jobs import strategy_iteration as run_iteration
 
 
 # ============================================================

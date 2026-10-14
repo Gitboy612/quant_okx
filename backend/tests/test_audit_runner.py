@@ -35,9 +35,7 @@ from models.system_settings import SystemSetting
 from models.strategy_event import StrategyEvent
 from models.notification_rule import NotificationRule
 
-# 导入被测模块
-_AUDIT_DIR = Path(__file__).resolve().parent.parent / "tests" / "reports" / "strategy_research"
-sys.path.insert(0, str(_AUDIT_DIR))
+# 被测模块位于 research.jobs 包。
 
 # 内存 SQLite 引擎（StaticPool 保证同进程多线程共享同一内存库连接）
 # 注意：切勿使用 database.engine（生产 DB），否则 drop_all 会清空生产数据
@@ -77,7 +75,7 @@ def clean_db(db_session):
 @pytest.fixture
 def isolated_audit_files(tmp_path, monkeypatch):
     """将审计输出文件重定向到临时目录，避免污染真实报告目录。"""
-    import audit_runner
+    from research.jobs import audit_runner
     monkeypatch.setattr(audit_runner, "REPORT_DIR", tmp_path)
     monkeypatch.setattr(audit_runner, "LATEST_FILE", tmp_path / "audit_latest.json")
     monkeypatch.setattr(audit_runner, "AUDIT_LOG", tmp_path / "audit.log")
@@ -186,7 +184,7 @@ def _make_pnl_record(db, strategy_instance_id=1, account_id=1, realized_pnl=50.0
 class TestCheckOrderUniqueness:
     def test_no_orders_passes(self, clean_db, isolated_audit_files):
         """无订单时通过。"""
-        import audit_runner
+        from research.jobs import audit_runner
         result = audit_runner.check_order_uniqueness(clean_db)
         assert result["passed"] is True
         assert result["total_orders_checked"] == 0
@@ -202,7 +200,7 @@ class TestCheckOrderUniqueness:
         _make_order(clean_db, "order_1", strategy_instance_id=1)
         _make_order(clean_db, "order_2", strategy_instance_id=2)
 
-        import audit_runner
+        from research.jobs import audit_runner
         result = audit_runner.check_order_uniqueness(clean_db)
         assert result["passed"] is True
         assert result["total_orders_checked"] == 2
@@ -235,7 +233,7 @@ class TestCheckOrderUniqueness:
         clean_db.rollback()
 
         # 审计扫描：DB 已阻止重复，审计应通过
-        import audit_runner
+        from research.jobs import audit_runner
         result = audit_runner.check_order_uniqueness(clean_db)
         assert result["passed"] is True
         assert len(result["duplicate_claims"]) == 0
@@ -249,7 +247,7 @@ class TestCheckOrderUniqueness:
         # 孤儿订单：strategy_instance_id=None
         _make_order(clean_db, "orphan_order", strategy_instance_id=None)
 
-        import audit_runner
+        from research.jobs import audit_runner
         result = audit_runner.check_order_uniqueness(clean_db)
         assert result["passed"] is False
         assert len(result["orphan_orders"]) == 1
@@ -263,8 +261,8 @@ class TestCheckPnlCorrectness:
     @pytest.mark.asyncio
     async def test_no_running_instances_passes(self, clean_db, isolated_audit_files):
         """无运行中策略时通过。"""
-        import audit_runner
-        with patch("audit_runner.SessionLocal", return_value=clean_db):
+        from research.jobs import audit_runner
+        with patch("research.jobs.audit_runner.SessionLocal", return_value=clean_db):
             result = await audit_runner.check_pnl_correctness(clean_db)
         assert result["passed"] is True
         assert result["total_checked"] == 0
@@ -280,7 +278,7 @@ class TestCheckPnlCorrectness:
         _make_order(clean_db, "order_1", strategy_instance_id=1, side="buy")
         _make_order(clean_db, "order_2", strategy_instance_id=1, side="sell")
 
-        import audit_runner
+        from research.jobs import audit_runner
 
         # mock recompute 返回与 PnlRecord 一致的值
         async def mock_recompute(strategy_instance_id, client=None):
@@ -290,7 +288,7 @@ class TestCheckPnlCorrectness:
             return mock_snapshot
 
         with patch.object(audit_runner.pnl_accounting_engine, "recompute", side_effect=mock_recompute):
-            with patch("audit_runner.OKXClient"):
+            with patch("research.jobs.audit_runner.OKXClient"):
                 result = await audit_runner.check_pnl_correctness(clean_db)
 
         assert result["passed"] is True
@@ -307,7 +305,7 @@ class TestCheckPnlCorrectness:
         _make_order(clean_db, "order_1", strategy_instance_id=1, side="buy")
         _make_order(clean_db, "order_2", strategy_instance_id=1, side="sell")
 
-        import audit_runner
+        from research.jobs import audit_runner
 
         # mock recompute 返回不一致的值（差 10 USDT > 容差 0.5）
         async def mock_recompute(strategy_instance_id, client=None):
@@ -317,7 +315,7 @@ class TestCheckPnlCorrectness:
             return mock_snapshot
 
         with patch.object(audit_runner.pnl_accounting_engine, "recompute", side_effect=mock_recompute):
-            with patch("audit_runner.OKXClient"):
+            with patch("research.jobs.audit_runner.OKXClient"):
                 result = await audit_runner.check_pnl_correctness(clean_db)
 
         assert result["passed"] is False
@@ -333,13 +331,13 @@ class TestCheckPnlCorrectness:
         _make_pnl_record(clean_db, strategy_instance_id=1, realized_pnl=0.0,
                          net_position=0.0, avg_buy_price=0.0)
 
-        import audit_runner
+        from research.jobs import audit_runner
 
         async def mock_recompute(strategy_instance_id, client=None):
             return None  # 无成交
 
         with patch.object(audit_runner.pnl_accounting_engine, "recompute", side_effect=mock_recompute):
-            with patch("audit_runner.OKXClient"):
+            with patch("research.jobs.audit_runner.OKXClient"):
                 result = await audit_runner.check_pnl_correctness(clean_db)
 
         assert result["passed"] is True
@@ -353,7 +351,7 @@ class TestCheckPositionIsolation:
     @pytest.mark.asyncio
     async def test_no_running_passes(self, clean_db, isolated_audit_files):
         """无运行中策略时通过。"""
-        import audit_runner
+        from research.jobs import audit_runner
         result = await audit_runner.check_position_isolation(clean_db)
         assert result["passed"] is True
         assert result["total_checked"] == 0
@@ -365,7 +363,7 @@ class TestCheckPositionIsolation:
         _make_template(clean_db)
         _make_instance(clean_db, instance_id=1, symbol="ETH-USDT-SWAP")
 
-        import audit_runner
+        from research.jobs import audit_runner
 
         async def mock_reconcile(account_id, symbol, client=None, tolerance=None):
             return {
@@ -390,7 +388,7 @@ class TestCheckPositionIsolation:
         _make_template(clean_db)
         _make_instance(clean_db, instance_id=1, symbol="ETH-USDT-SWAP")
 
-        import audit_runner
+        from research.jobs import audit_runner
 
         async def mock_reconcile(account_id, symbol, client=None, tolerance=None):
             return {
@@ -420,7 +418,7 @@ class TestCheckCapitalConstraints:
         _make_template(clean_db)
         _make_instance(clean_db, instance_id=1, params={"investment_amount": 0, "lever": 1})
 
-        import audit_runner
+        from research.jobs import audit_runner
         result = audit_runner.check_capital_constraints(clean_db)
         assert result["passed"] is True
         assert result["total_checked"] == 0
@@ -433,7 +431,7 @@ class TestCheckCapitalConstraints:
         # cap = 100 × 2 = 200; current = 1 × 100 = 100 < 200
         _make_pnl_record(clean_db, strategy_instance_id=1, net_position=1.0, avg_buy_price=100.0)
 
-        import audit_runner
+        from research.jobs import audit_runner
         result = audit_runner.check_capital_constraints(clean_db)
         assert result["passed"] is True
         assert result["total_checked"] == 1
@@ -447,7 +445,7 @@ class TestCheckCapitalConstraints:
         # cap = 100 × 2 = 200; current = 3 × 100 = 300 > 200×1.05=210
         _make_pnl_record(clean_db, strategy_instance_id=1, net_position=3.0, avg_buy_price=100.0)
 
-        import audit_runner
+        from research.jobs import audit_runner
         result = audit_runner.check_capital_constraints(clean_db)
         assert result["passed"] is False
         assert len(result["violations"]) == 1
@@ -463,7 +461,7 @@ class TestCheckOkxTradeRecords:
     @pytest.mark.asyncio
     async def test_no_running_instances_passes(self, clean_db, isolated_audit_files):
         """无运行中策略时通过。"""
-        import audit_runner
+        from research.jobs import audit_runner
         result = await audit_runner.check_okx_trade_records(clean_db)
         assert result["passed"] is True
         assert result["per_symbol"] == []
@@ -494,8 +492,8 @@ class TestCheckOkxTradeRecords:
         mock_client = MagicMock()
         mock_client.trade.get_fills = AsyncMock(return_value=fills)
 
-        import audit_runner
-        with patch("audit_runner.OKXClient", return_value=mock_client):
+        from research.jobs import audit_runner
+        with patch("research.jobs.audit_runner.OKXClient", return_value=mock_client):
             result = await audit_runner.check_okx_trade_records(clean_db)
 
         assert result["passed"] is True
@@ -536,8 +534,8 @@ class TestCheckOkxTradeRecords:
         mock_client = MagicMock()
         mock_client.trade.get_fills = AsyncMock(return_value=fills)
 
-        import audit_runner
-        with patch("audit_runner.OKXClient", return_value=mock_client):
+        from research.jobs import audit_runner
+        with patch("research.jobs.audit_runner.OKXClient", return_value=mock_client):
             result = await audit_runner.check_okx_trade_records(clean_db)
 
         assert result["passed"] is True
@@ -566,8 +564,8 @@ class TestCheckOkxTradeRecords:
         mock_client = MagicMock()
         mock_client.trade.get_fills = AsyncMock(return_value=fills)
 
-        import audit_runner
-        with patch("audit_runner.OKXClient", return_value=mock_client):
+        from research.jobs import audit_runner
+        with patch("research.jobs.audit_runner.OKXClient", return_value=mock_client):
             result = await audit_runner.check_okx_trade_records(clean_db)
 
         assert result["passed"] is False
@@ -595,8 +593,8 @@ class TestCheckOkxTradeRecords:
         mock_client = MagicMock()
         mock_client.trade.get_fills = AsyncMock(return_value=fills)
 
-        import audit_runner
-        with patch("audit_runner.OKXClient", return_value=mock_client):
+        from research.jobs import audit_runner
+        with patch("research.jobs.audit_runner.OKXClient", return_value=mock_client):
             result = await audit_runner.check_okx_trade_records(clean_db)
 
         assert result["passed"] is False
@@ -629,8 +627,8 @@ class TestCheckOkxTradeRecords:
         mock_client = MagicMock()
         mock_client.trade.get_fills = AsyncMock(return_value=fills)
 
-        import audit_runner
-        with patch("audit_runner.OKXClient", return_value=mock_client):
+        from research.jobs import audit_runner
+        with patch("research.jobs.audit_runner.OKXClient", return_value=mock_client):
             result = await audit_runner.check_okx_trade_records(clean_db)
 
         assert result["passed"] is False
@@ -653,8 +651,8 @@ class TestCheckOkxTradeRecords:
         mock_client = MagicMock()
         mock_client.trade.get_fills = AsyncMock(side_effect=Exception("API timeout"))
 
-        import audit_runner
-        with patch("audit_runner.OKXClient", return_value=mock_client):
+        from research.jobs import audit_runner
+        with patch("research.jobs.audit_runner.OKXClient", return_value=mock_client):
             result = await audit_runner.check_okx_trade_records(clean_db)
 
         # API 失败不中断审计，sym_result 默认 matched=True
@@ -684,8 +682,8 @@ class TestCheckOkxTradeRecords:
         mock_client = MagicMock()
         mock_client.trade.get_fills = AsyncMock(return_value=[])
 
-        import audit_runner
-        with patch("audit_runner.OKXClient", return_value=mock_client):
+        from research.jobs import audit_runner
+        with patch("research.jobs.audit_runner.OKXClient", return_value=mock_client):
             result = await audit_runner.check_okx_trade_records(clean_db)
 
         sym = result["per_symbol"][0]
@@ -710,8 +708,8 @@ class TestCheckOkxTradeRecords:
         mock_client = MagicMock()
         mock_client.trade.get_fills = AsyncMock(return_value=fills)
 
-        import audit_runner
-        with patch("audit_runner.OKXClient", return_value=mock_client):
+        from research.jobs import audit_runner
+        with patch("research.jobs.audit_runner.OKXClient", return_value=mock_client):
             result = await audit_runner.check_okx_trade_records(clean_db)
 
         # 只查一次（一个 per_symbol 条目）
@@ -727,7 +725,7 @@ class TestRunAudit:
     @pytest.mark.asyncio
     async def test_run_audit_writes_report(self, clean_db, isolated_audit_files):
         """run_audit 生成报告文件 + latest 文件。"""
-        import audit_runner
+        from research.jobs import audit_runner
 
         with patch.object(audit_runner, "SessionLocal", return_value=clean_db):
             report = await audit_runner.run_audit()
@@ -752,7 +750,7 @@ class TestRunAudit:
     @pytest.mark.asyncio
     async def test_run_audit_empty_db_passes(self, clean_db, isolated_audit_files):
         """空数据库时全部检查通过。"""
-        import audit_runner
+        from research.jobs import audit_runner
 
         with patch.object(audit_runner, "SessionLocal", return_value=clean_db):
             report = await audit_runner.run_audit()
@@ -773,7 +771,7 @@ class TestRecordAuditEvent:
         _make_template(clean_db)
         _make_instance(clean_db, instance_id=1)
 
-        import audit_runner
+        from research.jobs import audit_runner
         audit_runner._record_audit_event(
             clean_db,
             strategy_instance_id=1,
@@ -791,7 +789,7 @@ class TestRecordAuditEvent:
 
     def test_record_event_none_strategy_id_skips_db(self, clean_db, isolated_audit_files):
         """strategy_instance_id=None 时不写表，只写日志。"""
-        import audit_runner
+        from research.jobs import audit_runner
         audit_runner._record_audit_event(
             clean_db,
             strategy_instance_id=None,

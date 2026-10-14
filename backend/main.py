@@ -22,6 +22,10 @@ from routers.notifications import router as notifications_router
 from routers.analytics import router as analytics_router
 from routers.sandbox import router as sandbox_router
 from services.strategy_engine import strategy_engine
+from models.user import User
+from models.strategy import StrategyInstance
+from services.auth_service import hash_password
+from database import SessionLocal
 
 app = FastAPI(title="QuantOKX", version="1.0.0")
 
@@ -58,11 +62,6 @@ if FRONTEND_DIR.exists():
 async def startup():
     init_db()
     strategy_engine.seed_templates()
-
-from models.user import User
-from models.strategy import StrategyInstance
-from services.auth_service import hash_password
-from database import SessionLocal
 
     db = SessionLocal()
     try:

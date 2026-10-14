@@ -19,7 +19,7 @@
 
 | 能力维度 | QuantOKX（本平台） | FMZ（fmz.com） | Coinrule（web.coinrule.com） |
 |----------|--------------------|----------------|------------------------------|
-| 部署形态 | **本地优先**：本地 uvicorn 服务 + SQLite，API Key 仅本地 AES 加密存储 | 云端托管 Robot 为主（可自建 Docker），API Key 配置于平台 | 云端 SaaS，API Key 托管于云端 |
+| 部署形态 | **本地优先**：本地 uvicorn 服务 + SQLite，API Key 使用本地 Fernet 加密存储 | 云端托管 Robot 为主（可自建 Docker），API Key 配置于平台 | 云端 SaaS，API Key 托管于云端 |
 | API Key 隐私 | **不上传服务器**，本地 `data/quant_okx.db` 加密保存 | 默认云端托管（自建 Docker 可本地化） | 云端托管 |
 | 策略构建方式 | **可视化 DSL 积木库**（指标/条件/动作/事件四类）+ QS-Model 四段式配置 | 纯代码（JavaScript / Python / C++ / 麦语言） | 无代码 if-then 规则 |
 | 多策略同品种仓位隔离归因 | **真实隔离**：每策略独立虚拟持仓 + 净持仓均价 + 已实现盈亏独立核算，并通过 `reconcile_positions` 与交易所真实持仓对账 | 无独立虚拟仓位概念，策略间持仓共享 | 无（规则级，无仓位归因） |
@@ -41,8 +41,8 @@
 
 ### 卖点 1：本地优先隐私——API Key 本地加密，不上传服务器
 
-- **能力**：平台以本地 uvicorn 服务运行，数据库为本地 SQLite（`data/quant_okx.db`），所有 OKX API Key 使用 AES 加密存储，绝不上传任何外部服务器。
-- **实现位置**：`docs/user-guide.md` 第 2.1 节"所有 API Key 均使用 AES 加密存储"；启动方式 `uvicorn backend.main:app`（本地）。
+- **能力**：平台以本地 uvicorn 服务运行，数据库为本地 SQLite（`data/quant_okx.db`），OKX API Key 使用 Fernet 加密后存储；连接 OKX 时仍需按交易所协议发送凭据。
+- **实现位置**：`backend/services/encryption_service.py`；从 `backend/` 目录以 `python -m uvicorn main:app` 启动，或使用根目录的启动脚本。
 - **对比**：FMZ 默认将 Robot 托管于云端、API Key 配置于平台；Coinrule 为云端 SaaS，Key 完全托管。本平台让注重资产安全的交易者完全掌控密钥。
 
 ### 卖点 2：真实仓位隔离归因——多策略同品种各自 PnL 独立 + 虚拟仓位对账
@@ -116,7 +116,7 @@
 
 1. **单交易所**：当前仅支持 OKX（现货 + 永续合约），不支持 Binance / Huobi / Bybit 等其他交易所。跨所套利场景需另选工具。
 2. **无在线策略市场**：仅支持模板 JSON 文件本地导入导出，无 FMZ 式在线策略广场与社区共享。
-3. **无云端托管**：平台为本地优先架构，需用户自备可运行 Python 3.11+ 的机器并保持开机，无云端 7×24 托管能力。
+3. **无云端托管**：平台为本地优先架构，需用户自备可运行 Python 3.10+ 的机器并保持开机，无云端 7×24 托管能力。
 4. **回测策略类型有限**：回测引擎当前支持 grid / trend（arbitrage 占位复用 trend），RSI / 布林带 / 唐奇安 / 定投 / 马丁等策略的回测尚未独立实现。
 5. **单用户/本地账户体系**：默认管理员账号 `admin/admin123`，面向单用户本地部署，非多租户 SaaS。
 6. **DSL 积木库仍在完善**：积木库已实现核心指标/条件/动作/事件，但部分高级积木（如多腿组合订单、跨品种价差指标）尚在演进中。

@@ -57,6 +57,8 @@ REM web 版还需 node/npm（构建 React 前端）；桌面版用 QML，无需 
 if "%TARGET%"=="desktop" goto :deps_ok
 where node >nul 2>nul
 if errorlevel 1 goto :no_node
+node -e "const [major,minor]=process.versions.node.split('.').map(Number);process.exit(major>22||(major===22&&minor>=12)?0:1)"
+if errorlevel 1 goto :old_node
 where npm >nul 2>nul
 if errorlevel 1 goto :no_npm
 :deps_ok
@@ -138,7 +140,10 @@ exit /b 0
 
 REM ===== Error handlers =====
 :no_node
-echo [error] Node.js not found. Please install Node.js 18+ and retry.
+echo [error] Node.js not found. Please install Node.js 22.12+ and retry.
+goto :error
+:old_node
+echo [error] Node.js 22.12+ is required for the web frontend build.
 goto :error
 :no_npm
 echo [error] npm not found. Please check Node.js installation.

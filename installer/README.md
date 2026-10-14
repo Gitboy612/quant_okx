@@ -17,7 +17,7 @@ installer/
 | 依赖 | 版本要求 | 说明 |
 | --- | --- | --- |
 | Python | 3.10+ | 后端运行时与打包工具 |
-| Node.js | 18+ | 前端构建（npm） |
+| Node.js | 22.12+ | Web 前端构建（npm）；仅构建 QML 桌面版时不需要 |
 | PyInstaller | 最新版 | 执行 `pip install pyinstaller` 安装 |
 | Inno Setup | 6 | 编译 `.iss` 生成安装包，安装后需将其安装目录加入系统 `PATH` |
 
@@ -42,7 +42,7 @@ installer\build_installer.bat
 ```bat
 :: 1. 构建前端
 cd frontend
-npm install
+npm install --include=optional
 npm run build
 cd ..
 

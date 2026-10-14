@@ -14,7 +14,7 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(SPEC))
 
 # 数据文件：
 # 1. frontend/dist → frontend/dist (后端 main.py 通过 _MEIPASS/frontend/dist 托管)
-# 2. backend/bin/mihomo.exe → bin/mihomo.exe (proxy_core.py frozen 时查找 _MEIPASS/bin/mihomo.exe)
+# 2. backend/bin/mihomo.exe → bin/mihomo.exe (proxy_runtime.py frozen 时查找 _MEIPASS/bin/mihomo.exe)
 datas = [
     (os.path.join(PROJECT_ROOT, 'frontend', 'dist'), 'frontend/dist'),
     (os.path.join(PROJECT_ROOT, 'backend', 'bin', 'mihomo.exe'), 'bin'),

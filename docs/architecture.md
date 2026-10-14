@@ -4,6 +4,10 @@
 
 QuantOKX 是模块化单体应用，而非微服务。Web UI 与桌面 UI 是两套客户端；业务状态主要由同一个 Python 进程和本地 SQLite 管理。外部依赖包括 OKX REST/WebSocket、可选代理核心以及通知渠道。
 
+后端职责按目录划分：`routers/` 负责 HTTP/WS 边界，`schemas/` 定义部分请求契约，`services/` 负责业务服务和外部集成，`strategies/` 与 `dsl/` 负责策略执行，`research/jobs/` 放研究与审计任务，`models/` 和 `database.py` 负责持久化。`tests/` 只保存测试；研究运行状态与生成报告统一写入被 Git 忽略的 `data/research/`，`research/paths.py` 可在旧目录仍存在时复制其状态文件。
+
+目录约定：HTTP/WS 路由文件只命名接口领域；服务文件按明确职责命名，例如 `proxy_config_service.py` 管理配置，`proxy_runtime.py` 管理 Mihomo 进程；定时任务放在 `research/jobs/`，不放在测试目录；生成数据放在 `data/`，不提交到仓库。新模块应通过包路径导入，避免依赖测试报告目录。现有桌面桥接直接访问 ORM、路由中混用同步数据库调用等边界问题仍需分阶段治理。
+
 ```mermaid
 flowchart LR
     Browser[React Web UI] -->|REST /api| API[FastAPI]
@@ -126,7 +130,7 @@ flowchart TD
 
 ### 策略运行
 
-`strategy_templates` 保存复用配置 → `strategy_instances` 合并默认参数并绑定账户/symbol → `StrategyEngine` 建立内存任务 → `OrderManager` 与 `PnlAccountingEngine` 将运行结果写回 SQLite。重启时内存任务丢失，启动钩子将残留状态改成 `stopped`。
+`strategy_templates` 保存复用配置 → `strategy_instances` 合并默认参数并绑定账户/symbol → `StrategyEngine` 建立内存任务 → `OrderManager` 与 `PnlAccountingEngine` 将运行结果写回 SQLite。重启时内存任务丢失；启动钩子尝试对账并恢复孤儿实例，失败时将残留的 `running`/`paused` 状态标记为 `recovering`，保留 `desired_status`，不会直接改成 `stopped`。
 
 ### PnL
 

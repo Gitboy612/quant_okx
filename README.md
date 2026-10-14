@@ -45,7 +45,7 @@ flowchart LR
 ## Requirements
 
 - Python 3.10 or newer
-- Node.js 18 or newer
+- Node.js 22.12 or newer for the web frontend
 - npm
 - Windows 10/11 for the bundled installer and `.bat` scripts
 - Network access to the OKX API, or a configured proxy
@@ -72,7 +72,7 @@ Then open <http://127.0.0.1:5173>.
 
 ### macOS helper scripts
 
-The macOS installer checks Python 3.10+, Node.js 18+, npm, and Xcode Command Line Tools. When required and Homebrew is already available, it installs missing Python or Node.js versions. It then creates `backend/.venv`, installs the backend and frontend dependencies, creates `.env`, and generates a random JWT secret.
+The macOS installer checks Python 3.10+, Node.js 22.12+, npm, and Xcode Command Line Tools. When required and Homebrew is already available, it installs missing Python or Node.js versions. It then creates `backend/.venv`, installs the backend and frontend dependencies, creates `.env`, and generates a random JWT secret.
 
 ```bash
 chmod +x install_mac.sh start_mac.sh
@@ -81,6 +81,8 @@ chmod +x install_mac.sh start_mac.sh
 ```
 
 The startup script runs the FastAPI backend and Vite frontend together, opens <http://127.0.0.1:5173>, and stops both processes when you press `Ctrl+C`.
+
+`install_mac.sh` prepares dependencies and local configuration; `start_mac.sh` runs the development servers. Neither script creates a macOS application package. Use `npm run build` in `frontend/` to produce the static web assets.
 
 ### Manual setup (Windows, macOS, or Linux)
 
@@ -92,10 +94,10 @@ cp .env.example .env
 python3 -m venv backend/.venv
 source backend/.venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install -r backend/requirements.txt python-dotenv
+python -m pip install -r backend/requirements.txt
 
 cd frontend
-npm install
+npm install --include=optional
 cd ..
 ```
 
@@ -221,7 +223,7 @@ Keep the default `HOST=127.0.0.1` unless authentication, TLS, firewall rules, ba
 The QML desktop client reads the same local data through a Python bridge. Install both dependency sets if you want the optional embedded HTTP backend:
 
 ```bash
-python -m pip install -r backend/requirements.txt -r desktop/requirements.txt python-dotenv
+python -m pip install -r backend/requirements.txt -r desktop/requirements.txt
 cd desktop
 python main.py
 ```
@@ -232,7 +234,8 @@ Set `DESKTOP_BACKEND_HTTP=1` to start the FastAPI backend inside the desktop pro
 
 ```text
 quant_okx/
-├── backend/          FastAPI API, trading engine, DSL, models, and tests
+├── backend/          FastAPI API, trading engine, DSL, research jobs, models, and tests
+├── data/             Local database, encryption key, and research output (ignored by Git)
 ├── desktop/          PySide6/QML desktop application
 ├── docs/             User, strategy, product, and engineering documentation
 ├── frontend/         React/Vite web dashboard
@@ -245,6 +248,8 @@ quant_okx/
 └── start_mac.sh      macOS development launcher
 ```
 
+Within `backend/`, `routers/` contains API endpoints, `services/` contains shared business integrations, `strategies/` and `dsl/` contain strategy execution, `research/jobs/` contains research and audit jobs, and `tests/` contains tests. Generated research state and reports live under the ignored `data/research/` directory; `research/paths.py` can copy legacy state from the former test-report location when present.
+
 ## Documentation
 
 - [Technical development guide (Chinese)](docs/development-guide.md)
@@ -256,6 +261,7 @@ quant_okx/
 - [Troubleshooting and technical debt (Chinese)](docs/troubleshooting.md)
 - [User guide](docs/user-guide.md)
 - [Strategy writing guide](docs/strategy-writing-guide.md)
+- [Strategy taxonomy](docs/strategy-taxonomy.md) and [text template example](docs/examples/strategy-text-template.txt)
 - [Product positioning and current limitations](docs/product-positioning.md)
 - [Backend improvement review](docs/backend-improvement-review.md)
 - [Windows packaging guide](installer/README.md)

@@ -5,9 +5,9 @@
 | 项目 | 内容 |
 |---|---|
 | 现象 | `ModuleNotFoundError: aiosqlite/dotenv/yaml`，cryptography/bcrypt 安装失败，Vite 拒绝 Node 版本 |
-| 可能原因 | `requirements.txt` 未列全部运行依赖；Python/Node 版本过低；Windows 缺 VC++ runtime |
+| 可能原因 | 未在正确的虚拟环境安装依赖；Python/Node 版本过低；Windows 缺 VC++ runtime |
 | 检查 | `python --version`、`node --version`、`npm --version`；运行安装脚本的 import smoke test |
-| 处理 | Python 3.10+；Node 22.12+；安装 `aiosqlite python-dotenv PyYAML`；Windows 安装 VC++ 2015–2022 x64 |
+| 处理 | Python 3.10+；Node 22.12+；运行 `python -m pip install -r backend/requirements.txt`；Windows 安装 VC++ 2015–2022 x64 |
 
 不要在现有用户环境里混装；优先使用 `backend/.venv`。
 
@@ -68,7 +68,7 @@
 5. 策略事件和 API call logs 是否有 `order_rejected`、`capital_limit`、`margin_warning`。
 6. OKX 响应必须同时检查外层 `code` 与单笔 `sCode`。
 
-服务重启会把数据库残留的 running/paused 重置 stopped，这是预期行为。若 UI 状态旧，等待 5 秒刷新或重新聚焦页面；若数据库显示 running 但内存无 task，检查 `StrategyEngine._on_strategy_task_done` 的异常日志。
+服务重启会尝试对账并恢复残留策略；恢复异常时将 running/paused 标记为 recovering，并保留 desired_status。若 UI 状态旧，等待 5 秒刷新或重新聚焦页面；若数据库显示 running 但内存无 task，检查恢复日志与 `StrategyEngine._on_strategy_task_done` 的异常日志。
 
 ## 8. PnL、订单或仓位不一致
 
@@ -159,7 +159,6 @@
 | 中 | 日志/PnL 无保留期 | log/PnL heartbeat | 磁盘持续增长 | retention、归档、维护计划 |
 | 低 | 前端 20 lint warning | 2026-08-11 实测 | hook 陈旧闭包/维护噪声 | 逐项修复并将新增 warning 设为失败 |
 | 低 | 主 JS 和视频体积大 | Vite build | 首屏、安装包体积 | code split、延迟加载、压缩视频 |
-| 低 | Node 版本文档矛盾 | README/脚本/Vite | 新人搭建失败 | 统一 Node 22.12+ |
 | 低 | 账户锁定用 `datetime.replace` 算分钟 | `routers/auth.py` | 边界行为脆弱 | 改为 `now + timedelta(minutes=...)` |
 | 待确认 | `correct_unrealized_pnl` 文档称未实现 | `maintenance_service.py` docstring | 功能预期不清 | 明确设计或隐藏接口 |
 

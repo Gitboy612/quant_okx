@@ -41,10 +41,10 @@ from models.strategy_event import StrategyEvent  # noqa: E402
 from services import encryption_service  # noqa: E402
 from services.okx_client import OKXClient  # noqa: E402
 from services.pnl_accounting_engine import pnl_accounting_engine  # noqa: E402
+from research.paths import get_research_data_dir  # noqa: E402
 
 # ---- 报告路径 ----
-REPORTS_DIR = _BACKEND_ROOT / "tests" / "reports" / "strategy_research"
-REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+REPORTS_DIR = get_research_data_dir()
 STATUS_JSON = REPORTS_DIR / "status.json"
 EXECUTION_LOG = REPORTS_DIR / "execution.log"
 ANOMALY_DIR = REPORTS_DIR

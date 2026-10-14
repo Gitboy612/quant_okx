@@ -23,7 +23,8 @@
 
 ### 1.1 环境要求
 
-- Python 3.11+
+- Python 3.10+
+- Node.js 22.12+ 和 npm（运行 Web 前端时）
 - Windows / macOS / Linux
 - 网络可访问 OKX API（如遇网络问题可配置代理或 DNS 覆盖）
 
@@ -34,24 +35,22 @@
 git clone <项目仓库地址>
 cd quant_okx
 
-# 安装依赖（建议使用虚拟环境）
-python -m venv venv
-# Windows
-venv\Scripts\activate
-# macOS / Linux
-source venv/bin/activate
+# macOS：安装依赖并生成本地配置
+./install_mac.sh
 
-pip install -r requirements.txt
+# Windows：运行 install.bat
+# Linux：参照 README.md 的手工安装步骤
 ```
 
 ### 1.3 启动服务
 
 ```bash
-# 开发模式（自动热重载）
-uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
+# macOS：同时启动后端和 Web 前端
+./start_mac.sh
 
-# 生产模式
-python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
+# Windows：运行 start.bat
+# 手工启动：在 backend/ 目录运行 python -m uvicorn main:app --reload；
+# 另在 frontend/ 目录运行 npm run dev
 ```
 
 启动成功后，控制台会输出：
@@ -63,7 +62,7 @@ INFO:     Application startup complete.
 
 ### 1.4 访问与登录
 
-- 浏览器打开 `http://127.0.0.1:8000`
+- 开发模式浏览器打开 `http://127.0.0.1:5173`；构建后由后端托管时使用 `http://127.0.0.1:8000`
 - 默认管理员账号：`admin` / `admin123`
 - **首次登录后请立即修改密码**
 
@@ -97,7 +96,7 @@ INFO:     Application startup complete.
    - **Passphrase**：创建 API 时设置的口令
    - **交易模式**：`demo`（模拟盘）或 `live`（实盘）
 
-> 所有 API Key 均使用 AES 加密存储，不会以明文形式保存到数据库。
+> 所有 API Key 均使用 Fernet 加密后存入数据库；加密密钥保存在本地 `data/.encryption_key`，备份时需与数据库一起保存。
 
 ### 2.2 模拟盘 vs 实盘
 
@@ -688,7 +687,7 @@ curl -X POST http://127.0.0.1:8000/api/sandbox/sandbox_1735689600_abc12345/stop 
 ### 常见问题
 
 **Q: 启动后端服务报 `ModuleNotFoundError`？**
-A: 确保在项目根目录执行命令，且已安装所有依赖：`pip install -r requirements.txt`
+A: 请先运行 `install_mac.sh`（macOS）或 `install.bat`（Windows）。手工安装时，从项目根目录执行 `python -m pip install -r backend/requirements.txt`，并从 `backend/` 目录启动服务。
 
 **Q: OKX API 连接超时？**
 A: 检查网络是否能访问 OKX，或配置 `OKX_PROXY` 环境变量使用代理，或设置 `OKX_BASE_URL` 切换接入点（如 `https://aws.okx.com`）。

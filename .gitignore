@@ -12,9 +12,11 @@ build/
 *.env
 data/.encryption_key
 data/*.db
+data/research/
 
 .vscode/
 .idea/
+.trae/
 *.swp
 *.swo
 .DS_Store
@@ -37,3 +39,12 @@ backend/data/
 backend/1772848370833.yml
 backend/*.net
 backend/*.yml
+
+# Generated test and strategy research reports
+backend/tests/reports/daily_regression_*.html
+backend/tests/reports/daily_regression_*.json
+backend/tests/reports/e2e_report_*.json
+backend/tests/reports/strategy_research/anomaly_*.json
+backend/tests/reports/strategy_research/audit_report_*.json
+backend/tests/reports/strategy_research/function_check_report_*.json
+backend/tests/reports/strategy_research/strategy_test_report_*.json

@@ -34,9 +34,7 @@ from models.system_settings import SystemSetting
 from models.strategy_event import StrategyEvent
 from models.notification_rule import NotificationRule
 
-# 导入被测模块（与 test_audit_runner.py 同模式）
-_AUDIT_DIR = Path(__file__).resolve().parent.parent / "tests" / "reports" / "strategy_research"
-sys.path.insert(0, str(_AUDIT_DIR))
+# 被测模块位于 research.jobs 包。
 
 # 内存 SQLite 引擎（StaticPool 保证同进程多线程共享同一内存库连接）
 # 注意：切勿使用 database.engine（生产 DB），否则 drop_all 会清空生产数据
@@ -48,9 +46,9 @@ _TEST_ENGINE = create_engine(
 _TestSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_TEST_ENGINE)
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def db_session():
-    """模块级内存数据库 fixture。"""
+    """每项测试独立的内存数据库会话，避免 ORM 状态跨测试残留。"""
     Base.metadata.create_all(bind=_TEST_ENGINE)
     session = _TestSessionLocal()
     try:
@@ -74,7 +72,7 @@ def clean_db(db_session):
 @pytest.fixture
 def isolated_check_files(tmp_path, monkeypatch):
     """将检测输出文件重定向到临时目录，避免污染真实报告目录。"""
-    import function_checker
+    from research.jobs import function_checker
     monkeypatch.setattr(function_checker, "REPORT_DIR", tmp_path)
     monkeypatch.setattr(function_checker, "LATEST_FILE", tmp_path / "function_check_latest.json")
     monkeypatch.setattr(function_checker, "CHECK_LOG", tmp_path / "function_check.log")
@@ -208,7 +206,7 @@ def _make_error_event(db, strategy_instance_id=1, message="order_place_failed: �
 class TestCheckTheoreticalVsActualOrders:
     async def test_no_running_instances_passes(self, clean_db, isolated_check_files):
         """无运行中策略时通过。"""
-        import function_checker
+        from research.jobs import function_checker
         result = await function_checker.check_theoretical_vs_actual_orders(clean_db)
         assert result["passed"] is True
         assert result["per_strategy"] == []
@@ -222,7 +220,7 @@ class TestCheckTheoreticalVsActualOrders:
         _make_template(clean_db)
         # 缺 upper_price
         _make_instance(clean_db, instance_id=1, params={"lower_price": 100, "grid_count": 5})
-        import function_checker
+        from research.jobs import function_checker
         result = await function_checker.check_theoretical_vs_actual_orders(clean_db)
         assert result["passed"] is False
         assert "error" in result["per_strategy"][0]
@@ -255,8 +253,8 @@ class TestCheckTheoreticalVsActualOrders:
         mock_client = MagicMock()
         mock_client.get_ticker = AsyncMock(return_value=[{"last": "150"}])
 
-        import function_checker
-        with patch("function_checker.OKXClient", return_value=mock_client):
+        from research.jobs import function_checker
+        with patch("research.jobs.function_checker.OKXClient", return_value=mock_client):
             # patch market_data_service 返回 None 强制走 OKX 路径
             with patch("services.market_data_service.market_data_service.get_latest_ticker",
                        return_value=None):
@@ -293,8 +291,8 @@ class TestCheckTheoreticalVsActualOrders:
         mock_client = MagicMock()
         mock_client.get_ticker = AsyncMock(return_value=[{"last": "150"}])
 
-        import function_checker
-        with patch("function_checker.OKXClient", return_value=mock_client):
+        from research.jobs import function_checker
+        with patch("research.jobs.function_checker.OKXClient", return_value=mock_client):
             with patch("services.market_data_service.market_data_service.get_latest_ticker",
                        return_value=None):
                 result = await function_checker.check_theoretical_vs_actual_orders(clean_db)
@@ -329,8 +327,8 @@ class TestCheckTheoreticalVsActualOrders:
         mock_client = MagicMock()
         mock_client.get_ticker = AsyncMock(return_value=[{"last": "150"}])
 
-        import function_checker
-        with patch("function_checker.OKXClient", return_value=mock_client):
+        from research.jobs import function_checker
+        with patch("research.jobs.function_checker.OKXClient", return_value=mock_client):
             with patch("services.market_data_service.market_data_service.get_latest_ticker",
                        return_value=None):
                 result = await function_checker.check_theoretical_vs_actual_orders(clean_db)
@@ -360,8 +358,8 @@ class TestCheckTheoreticalVsActualOrders:
         mock_client = MagicMock()
         mock_client.get_ticker = AsyncMock(return_value=[{"last": "150"}])
 
-        import function_checker
-        with patch("function_checker.OKXClient", return_value=mock_client):
+        from research.jobs import function_checker
+        with patch("research.jobs.function_checker.OKXClient", return_value=mock_client):
             with patch("services.market_data_service.market_data_service.get_latest_ticker",
                        return_value=None):
                 result = await function_checker.check_theoretical_vs_actual_orders(clean_db)
@@ -388,8 +386,8 @@ class TestCheckTheoreticalVsActualOrders:
         mock_client = MagicMock()
         mock_client.get_ticker = AsyncMock(return_value=[{"last": "150"}])
 
-        import function_checker
-        with patch("function_checker.OKXClient", return_value=mock_client):
+        from research.jobs import function_checker
+        with patch("research.jobs.function_checker.OKXClient", return_value=mock_client):
             with patch("services.market_data_service.market_data_service.get_latest_ticker",
                        return_value=None):
                 result = await function_checker.check_theoretical_vs_actual_orders(clean_db)
@@ -410,7 +408,7 @@ class TestCheckStrategyErrors:
         _make_template(clean_db)
         _make_instance(clean_db, instance_id=1)
 
-        import function_checker
+        from research.jobs import function_checker
         result = function_checker.check_strategy_errors(clean_db)
         assert result["passed"] is True
         assert result["error_count"] == 0
@@ -427,7 +425,7 @@ class TestCheckStrategyErrors:
         _make_error_event(clean_db, strategy_instance_id=1,
                           message="order_place_failed: 资金不足")
 
-        import function_checker
+        from research.jobs import function_checker
         result = function_checker.check_strategy_errors(clean_db)
         assert result["passed"] is False
         assert result["error_count"] == 2
@@ -454,7 +452,7 @@ class TestCheckStrategyErrors:
         _make_error_event(clean_db, strategy_instance_id=1,
                           message="网络异常 (第1次)，退避 2s")
 
-        import function_checker
+        from research.jobs import function_checker
         result = function_checker.check_strategy_errors(clean_db)
         assert result["passed"] is False
         assert result["error_count"] == 4
@@ -477,7 +475,7 @@ class TestCheckStrategyErrors:
                           message="order_place_failed: 旧错误",
                           created_at=old_time)
 
-        import function_checker
+        from research.jobs import function_checker
         result = function_checker.check_strategy_errors(clean_db)
         # 旧事件不计入 → passed=True
         assert result["passed"] is True
@@ -490,7 +488,7 @@ class TestCheckStrategyErrors:
 class TestCheckActualPnl:
     async def test_no_running_instances_passes(self, clean_db, isolated_check_files):
         """无运行中策略时通过。"""
-        import function_checker
+        from research.jobs import function_checker
         result = await function_checker.check_actual_pnl(clean_db)
         assert result["passed"] is True
         assert result["per_strategy"] == []
@@ -523,8 +521,8 @@ class TestCheckActualPnl:
         mock_client.trade.get_fills = AsyncMock(return_value=fills)
         mock_client.trade.get_fills_history = AsyncMock(return_value=[])
 
-        import function_checker
-        with patch("function_checker.OKXClient", return_value=mock_client):
+        from research.jobs import function_checker
+        with patch("research.jobs.function_checker.OKXClient", return_value=mock_client):
             result = await function_checker.check_actual_pnl(clean_db)
 
         assert result["passed"] is True
@@ -562,9 +560,9 @@ class TestCheckActualPnl:
         mock_client.trade.get_fills = AsyncMock(return_value=fills)
         mock_client.trade.get_fills_history = AsyncMock(return_value=[])
 
-        import function_checker
+        from research.jobs import function_checker
         # mock instrument_cache.get_ct_val 返回 0.01（SWAP）
-        with patch("function_checker.OKXClient", return_value=mock_client):
+        with patch("research.jobs.function_checker.OKXClient", return_value=mock_client):
             with patch.object(function_checker.instrument_cache, "get_ct_val",
                               return_value=0.01):
                 result = await function_checker.check_actual_pnl(clean_db)
@@ -599,8 +597,8 @@ class TestCheckActualPnl:
         mock_client.trade.get_fills = AsyncMock(return_value=fills)
         mock_client.trade.get_fills_history = AsyncMock(return_value=[])
 
-        import function_checker
-        with patch("function_checker.OKXClient", return_value=mock_client):
+        from research.jobs import function_checker
+        with patch("research.jobs.function_checker.OKXClient", return_value=mock_client):
             result = await function_checker.check_actual_pnl(clean_db)
 
         assert result["passed"] is False
@@ -629,8 +627,8 @@ class TestCheckActualPnl:
         mock_client.trade.get_fills = AsyncMock(side_effect=Exception("API timeout"))
         mock_client.trade.get_fills_history = AsyncMock(return_value=[])
 
-        import function_checker
-        with patch("function_checker.OKXClient", return_value=mock_client):
+        from research.jobs import function_checker
+        with patch("research.jobs.function_checker.OKXClient", return_value=mock_client):
             result = await function_checker.check_actual_pnl(clean_db)
 
         # API 失败不中断，okx_realized_pnl=0, db_realized_pnl=0, diff=0 → matched
@@ -680,8 +678,8 @@ class TestCheckActualPnl:
         mock_client.trade.get_fills = AsyncMock(return_value=fills)
         mock_client.trade.get_fills_history = AsyncMock(return_value=[])
 
-        import function_checker
-        with patch("function_checker.OKXClient", return_value=mock_client):
+        from research.jobs import function_checker
+        with patch("research.jobs.function_checker.OKXClient", return_value=mock_client):
             result = await function_checker.check_actual_pnl(clean_db)
 
         per = result["per_strategy"][0]
@@ -708,8 +706,8 @@ class TestCheckActualPnl:
         mock_client.trade.get_fills = AsyncMock(return_value=fills)
         mock_client.trade.get_fills_history = AsyncMock(return_value=[])
 
-        import function_checker
-        with patch("function_checker.OKXClient", return_value=mock_client):
+        from research.jobs import function_checker
+        with patch("research.jobs.function_checker.OKXClient", return_value=mock_client):
             result = await function_checker.check_actual_pnl(clean_db)
 
         per = result["per_strategy"][0]
@@ -757,8 +755,8 @@ class TestCheckActualPnl:
         mock_client.trade.get_fills = AsyncMock(side_effect=mock_get_fills)
         mock_client.trade.get_fills_history = AsyncMock(return_value=[])
 
-        import function_checker
-        with patch("function_checker.OKXClient", return_value=mock_client):
+        from research.jobs import function_checker
+        with patch("research.jobs.function_checker.OKXClient", return_value=mock_client):
             result = await function_checker.check_actual_pnl(clean_db)
 
         # 总盈亏 = 4.8 + 0 = 4.8
@@ -797,8 +795,8 @@ class TestCheckActualPnl:
         mock_client.trade.get_fills = AsyncMock(return_value=fills)
         mock_client.trade.get_fills_history = AsyncMock(return_value=[])
 
-        import function_checker
-        with patch("function_checker.OKXClient", return_value=mock_client):
+        from research.jobs import function_checker
+        with patch("research.jobs.function_checker.OKXClient", return_value=mock_client):
             result = await function_checker.check_actual_pnl(clean_db)
 
         assert result["passed"] is False
@@ -844,8 +842,8 @@ class TestCheckActualPnl:
         mock_client.trade.get_fills = AsyncMock(return_value=fills)
         mock_client.trade.get_fills_history = AsyncMock(return_value=[])
 
-        import function_checker
-        with patch("function_checker.OKXClient", return_value=mock_client):
+        from research.jobs import function_checker
+        with patch("research.jobs.function_checker.OKXClient", return_value=mock_client):
             result = await function_checker.check_actual_pnl(clean_db)
 
         assert result["passed"] is False
@@ -873,8 +871,8 @@ class TestCheckActualPnl:
         mock_client.trade.get_fills = AsyncMock(side_effect=Exception("API timeout"))
         mock_client.trade.get_fills_history = AsyncMock(return_value=[])
 
-        import function_checker
-        with patch("function_checker.OKXClient", return_value=mock_client):
+        from research.jobs import function_checker
+        with patch("research.jobs.function_checker.OKXClient", return_value=mock_client):
             result = await function_checker.check_actual_pnl(clean_db)
 
         per = result["per_strategy"][0]
@@ -897,14 +895,14 @@ class TestCheckActualPnl:
 class TestFifoCalculation:
     def test_empty_fills(self):
         """空 fills 列表 → realized=0。"""
-        from function_checker import _compute_fifo_realized_pnl
+        from research.jobs.function_checker import _compute_fifo_realized_pnl
         realized, count = _compute_fifo_realized_pnl([], "SPOT", 1.0)
         assert realized == 0.0
         assert count == 0
 
     def test_only_buys(self):
         """只有买单 → realized=0（未平仓）。"""
-        from function_checker import _compute_fifo_realized_pnl
+        from research.jobs.function_checker import _compute_fifo_realized_pnl
         fills = [
             {"side": "buy", "fillPx": "100", "fillSz": "1", "fee": "0.1", "ts": "1"},
             {"side": "buy", "fillPx": "110", "fillSz": "2", "fee": "0.2", "ts": "2"},
@@ -915,7 +913,7 @@ class TestFifoCalculation:
 
     def test_simple_match(self):
         """简单 1:1 配对。"""
-        from function_checker import _compute_fifo_realized_pnl
+        from research.jobs.function_checker import _compute_fifo_realized_pnl
         fills = [
             {"side": "buy", "fillPx": "100", "fillSz": "1", "fee": "0.1", "ts": "1"},
             {"side": "sell", "fillPx": "110", "fillSz": "1", "fee": "0.1", "ts": "2"},
@@ -927,7 +925,7 @@ class TestFifoCalculation:
 
     def test_out_of_order_ts(self):
         """fills 未按 ts 排序 → 内部按 ts 排序后配对。"""
-        from function_checker import _compute_fifo_realized_pnl
+        from research.jobs.function_checker import _compute_fifo_realized_pnl
         fills = [
             {"side": "sell", "fillPx": "110", "fillSz": "1", "fee": "0.1", "ts": "2"},
             {"side": "buy", "fillPx": "100", "fillSz": "1", "fee": "0.1", "ts": "1"},
@@ -938,7 +936,7 @@ class TestFifoCalculation:
 
     def test_sell_exceeds_buy(self):
         """卖单数量超过买单 → 只匹配买单部分。"""
-        from function_checker import _compute_fifo_realized_pnl
+        from research.jobs.function_checker import _compute_fifo_realized_pnl
         fills = [
             {"side": "buy", "fillPx": "100", "fillSz": "1", "fee": "0.1", "ts": "1"},
             {"side": "sell", "fillPx": "110", "fillSz": "3", "fee": "0.3", "ts": "2"},
@@ -955,7 +953,7 @@ class TestFifoCalculation:
 class TestRunFunctionCheck:
     async def test_run_function_check_writes_report(self, clean_db, isolated_check_files):
         """run_function_check 生成报告文件 + latest 文件。"""
-        import function_checker
+        from research.jobs import function_checker
 
         with patch.object(function_checker, "SessionLocal", return_value=clean_db):
             report = await function_checker.run_function_check()
@@ -977,7 +975,7 @@ class TestRunFunctionCheck:
 
     async def test_run_function_check_empty_db_passes(self, clean_db, isolated_check_files):
         """空数据库时全部检查通过。"""
-        import function_checker
+        from research.jobs import function_checker
 
         with patch.object(function_checker, "SessionLocal", return_value=clean_db):
             report = await function_checker.run_function_check()
@@ -995,7 +993,7 @@ class TestRunFunctionCheck:
         _make_error_event(clean_db, strategy_instance_id=1,
                           message="order_place_failed: 参数错误")
 
-        import function_checker
+        from research.jobs import function_checker
         with patch.object(function_checker, "SessionLocal", return_value=clean_db):
             report = await function_checker.run_function_check()
 
@@ -1008,7 +1006,7 @@ class TestRunFunctionCheck:
         本测试为同步函数（非 async），确保 main() 内部的 asyncio.run()
         不受 pytest-asyncio 事件循环影响。
         """
-        import function_checker
+        from research.jobs import function_checker
 
         # 独立内存 DB（避免与模块级 fixture 冲突）
         _TEST_ENGINE_TMP = create_engine(
@@ -1038,7 +1036,7 @@ class TestRecordCheckEvent:
         _make_template(clean_db)
         _make_instance(clean_db, instance_id=1)
 
-        import function_checker
+        from research.jobs import function_checker
         function_checker._record_check_event(
             clean_db,
             strategy_instance_id=1,
@@ -1056,7 +1054,7 @@ class TestRecordCheckEvent:
 
     def test_record_event_none_strategy_id_skips_db(self, clean_db, isolated_check_files):
         """strategy_instance_id=None 时不写表，只写日志。"""
-        import function_checker
+        from research.jobs import function_checker
         function_checker._record_check_event(
             clean_db,
             strategy_instance_id=None,
@@ -1073,7 +1071,7 @@ class TestRecordCheckEvent:
 
     def test_record_event_handles_db_error(self, clean_db, isolated_check_files):
         """DB 写入失败时不抛异常（只记录日志）。"""
-        import function_checker
+        from research.jobs import function_checker
 
         # 用一个无效的 session 触发异常
         bad_db = MagicMock()

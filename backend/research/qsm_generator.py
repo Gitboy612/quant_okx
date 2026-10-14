@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from dsl.schema import QSModelConfig
+from research.paths import get_research_data_dir
 
 
 # ============================================================
@@ -501,9 +502,8 @@ def validate_qsm(qsm: dict) -> bool:
 # ============================================================
 
 
-# 基因池文件路径（与 run_iteration.py 的 REPORT_DIR 一致）
-_BACKEND_DIR = Path(__file__).resolve().parents[1]
-GENE_POOL_FILE = _BACKEND_DIR / "tests" / "reports" / "strategy_research" / "gene_pool.json"
+# 基因池与研究任务共用本地运行数据目录。
+GENE_POOL_FILE = get_research_data_dir() / "gene_pool.json"
 
 # 基因池读写锁（保证线程安全）
 _gene_pool_lock = threading.Lock()
@@ -652,7 +652,7 @@ def add_to_blacklist(
 def compute_logic_hash(qs_model_config: dict) -> str | None:
     """计算 qs_model_config.logic 段的 SHA-256 哈希。
 
-    与 run_iteration.py 中 _compute_logic_hash 逻辑一致。
+    与 strategy_iteration.py 中 _compute_logic_hash 逻辑一致。
     """
     logic = qs_model_config.get("logic", {}) or {}
     if not logic:
