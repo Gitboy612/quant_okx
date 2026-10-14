@@ -26,14 +26,58 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 DATABASE_URL = f"sqlite+aiosqlite:///{DATA_DIR / 'quant_okx.db'}"
 
 KEY_FILE = DATA_DIR / ".encryption_key"
+JWT_SECRET_FILE = DATA_DIR / ".jwt_secret"
 
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24
 JWT_ALGORITHM = "HS256"
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "quant-okx-secret-key-change-in-production")
 
 HOST = os.getenv("HOST", "127.0.0.1")
 PORT = int(os.getenv("PORT", "8000"))
 PRODUCTION = os.getenv("PRODUCTION", "").lower() in ("1", "true", "yes")
+
+_INSECURE_JWT_SECRETS = frozenset({
+    "",
+    "quant-okx-secret-key-change-in-production",
+    "change-this-to-a-random-secret-key",
+})
+
+
+def _load_or_create_jwt_secret() -> str:
+    """Resolve JWT signing secret without hardcoded plaintext defaults.
+
+    - In PRODUCTION: require an explicit, non-placeholder JWT_SECRET_KEY env var.
+    - In development/desktop: use JWT_SECRET_KEY if set (and not a known placeholder);
+      otherwise generate and persist a per-installation random secret in DATA_DIR.
+    """
+    import secrets
+
+    env_secret = os.getenv("JWT_SECRET_KEY", "").strip()
+    if PRODUCTION:
+        if env_secret in _INSECURE_JWT_SECRETS or len(env_secret) < 32:
+            raise RuntimeError(
+                "PRODUCTION=true requires a strong JWT_SECRET_KEY (at least 32 chars) "
+                "set via environment variable; refusing to start with default/weak secret."
+            )
+        return env_secret
+
+    if env_secret and env_secret not in _INSECURE_JWT_SECRETS:
+        return env_secret
+
+    if JWT_SECRET_FILE.exists():
+        stored = JWT_SECRET_FILE.read_text(encoding="utf-8").strip()
+        if stored and stored not in _INSECURE_JWT_SECRETS:
+            return stored
+
+    generated = secrets.token_urlsafe(48)
+    JWT_SECRET_FILE.write_text(generated, encoding="utf-8")
+    try:
+        os.chmod(JWT_SECRET_FILE, 0o600)
+    except Exception:
+        pass
+    return generated
+
+
+JWT_SECRET_KEY = _load_or_create_jwt_secret()
 
 _CORS_ORIGINS_RAW = os.getenv("CORS_ORIGINS", "").strip()
 CORS_ORIGINS = (

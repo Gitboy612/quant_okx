@@ -11,6 +11,7 @@ build/
 .env
 *.env
 data/.encryption_key
+data/.jwt_secret
 data/*.db
 data/research/
 
