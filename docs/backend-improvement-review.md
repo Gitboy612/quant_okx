@@ -23,7 +23,7 @@ This review is based on the current backend implementation. It focuses on change
 
 **Current state**
 
-- `backend/main.py` automatically creates `admin` with password `admin123`.
+- 首次使用已改为本机登录页自主设置 `admin` 密码；此前的固定初始密码问题已修复。
 - `backend/config.py` falls back to a known JWT secret.
 - `PRODUCTION` is parsed but does not enforce secure startup requirements.
 

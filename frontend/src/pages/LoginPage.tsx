@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Lock, PieChart, Blocks, FlaskConical, Shield, Zap } from 'lucide-react'
-import { login } from '../api/auth'
+import { login, getSetupStatus, completeInitialSetup } from '../api/auth'
 import { useAuth } from '../hooks/useAuth'
 import qstudioLogo3dSrc from '../assets/Logo.jpg'
 
@@ -300,7 +300,16 @@ export default function LoginPage() {
   const auth = useAuth()
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [setupRequired, setSetupRequired] = useState(false)
+  const [checkingSetup, setCheckingSetup] = useState(true)
   const [showOpening, setShowOpening] = useState(true)
+
+  useEffect(() => {
+    getSetupStatus()
+      .then((res) => setSetupRequired(res.data.setup_required))
+      .catch(() => setError('无法连接后端服务，请确认服务已启动'))
+      .finally(() => setCheckingSetup(false))
+  }, [])
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -308,15 +317,24 @@ export default function LoginPage() {
     setLoading(true)
 
     const form = new FormData(e.currentTarget)
-    const username = form.get('username') as string
+    const username = setupRequired ? 'admin' : form.get('username') as string
     const password = form.get('password') as string
+    const confirmPassword = form.get('confirm_password') as string
 
     try {
-      const res = await login({ username, password })
+      if (setupRequired && password !== confirmPassword) {
+        setError('两次输入的密码不一致')
+        return
+      }
+      const res = setupRequired
+        ? await completeInitialSetup({ password, confirm_password: confirmPassword })
+        : await login({ username, password })
       await auth.login(res.data.access_token)
       navigate('/dashboard')
-    } catch {
-      setError('用户名或密码错误')
+    } catch (err: unknown) {
+      const response = (err as { response?: { status?: number; data?: { detail?: string } } }).response
+      if (setupRequired && response?.status === 409) setSetupRequired(false)
+      setError(response?.data?.detail || (setupRequired ? '首次设置失败，请重试' : '用户名或密码错误'))
     } finally {
       setLoading(false)
     }
@@ -377,20 +395,19 @@ export default function LoginPage() {
             className="glass-panel p-8"
           >
             <form onSubmit={handleSubmit} className="space-y-5">
+              {setupRequired && (
+                <p className="text-sm text-[#00D4AA]">首次使用，请为管理员 admin 设置密码</p>
+              )}
               <motion.div
                 initial={{ opacity: 0, x: -20 }}
                 animate={{ opacity: showOpening ? 0 : 1, x: 0 }}
                 transition={{ delay: 0.4 }}
               >
                 <label className="block text-xs text-[#7B86A2] mb-2 uppercase tracking-wider">用户名</label>
-                <input
-                  name="username"
-                  type="text"
-                  placeholder="请输入用户名"
-                  autoComplete="username"
-                  required
-                  className="w-full px-4 py-3 text-sm placeholder:text-[#505C78]"
-                />
+                <input key={setupRequired ? 'setup' : 'login'} name="username" type="text" placeholder="请输入用户名"
+                  autoComplete="username" required defaultValue={setupRequired ? 'admin' : ''}
+                  readOnly={setupRequired}
+                  className="w-full px-4 py-3 text-sm placeholder:text-[#505C78]" />
               </motion.div>
 
               <motion.div
@@ -403,11 +420,22 @@ export default function LoginPage() {
                   name="password"
                   type="password"
                   placeholder="请输入密码"
-                  autoComplete="current-password"
+                  autoComplete={setupRequired ? 'new-password' : 'current-password'}
+                  minLength={setupRequired ? 8 : undefined}
                   required
                   className="w-full px-4 py-3 text-sm placeholder:text-[#505C78]"
                 />
               </motion.div>
+
+              {setupRequired && (
+                <div>
+                  <label className="block text-xs text-[#7B86A2] mb-2 uppercase tracking-wider">确认密码</label>
+                  <input name="confirm_password" type="password" placeholder="再次输入密码"
+                    autoComplete="new-password" required minLength={8}
+                    className="w-full px-4 py-3 text-sm placeholder:text-[#505C78]" />
+                  <p className="text-xs text-[#7B86A2] mt-2">至少 8 个字符；首次设置仅可在服务器本机完成</p>
+                </div>
+              )}
 
               {error && (
                 <motion.p
@@ -427,7 +455,7 @@ export default function LoginPage() {
               >
                 <button
                   type="submit"
-                  disabled={loading}
+                  disabled={loading || checkingSetup}
                   className="btn-primary w-full py-3 text-sm disabled:opacity-50"
                 >
                   {loading ? (
@@ -437,9 +465,9 @@ export default function LoginPage() {
                         transition={{ repeat: Infinity, duration: 1, ease: 'linear' }}
                         className="w-4 h-4 border-2 border-[#050711]/30 border-t-[#050711] rounded-full inline-block"
                       />
-                      验证中...
+                      {setupRequired ? '设置中...' : '验证中...'}
                     </span>
-                  ) : '登 录'}
+                  ) : checkingSetup ? '检查服务中...' : setupRequired ? '设置并进入' : '登 录'}
                 </button>
               </motion.div>
             </form>

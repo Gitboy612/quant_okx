@@ -294,7 +294,7 @@ echo.
 echo 下一步：双击 start.bat 启动 QuantOKX
 echo   - 后端 API 文档: http://127.0.0.1:8000/docs
 echo   - 前端 UI:       http://127.0.0.1:5173
-echo   - 默认账号:       admin / admin123
+echo   - 首次使用:       在本机登录页设置 admin 密码
 echo.
 echo 注意事项：
 echo   1) 生产部署请编辑 .env 修改 JWT_SECRET_KEY，并设置 PRODUCTION=true

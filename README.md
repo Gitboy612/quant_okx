@@ -123,7 +123,7 @@ Open:
 - Web dashboard: <http://127.0.0.1:5173>
 - OpenAPI documentation: <http://127.0.0.1:8000/docs>
 
-On the first backend startup, the application creates a local database and the development account `admin` / `admin123`. **Change this password immediately in Settings. Do not expose the server to a network with the default credentials.**
+On first use, open the login page from the server itself and choose a password for the `admin` account. Existing installations keep their current password. Initial setup is limited to loopback requests; for a remote server, use a local browser or an SSH tunnel.
 
 ## Configuration
 

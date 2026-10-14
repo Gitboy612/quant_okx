@@ -6,6 +6,11 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class InitialSetupRequest(BaseModel):
+    password: str
+    confirm_password: str
+
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"

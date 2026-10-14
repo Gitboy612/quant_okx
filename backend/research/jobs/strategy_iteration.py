@@ -655,10 +655,13 @@ async def _fetch_current_price(symbol: str, http_client=None) -> float | None:
         http_client = httpx.AsyncClient(timeout=15.0)
         own_client = True
     try:
-        # 登录获取 token
+        # 自动研究任务使用用户显式配置的凭据，不依赖固定初始密码。
+        research_password = os.getenv("RESEARCH_API_PASSWORD")
+        if not research_password:
+            return None
         login_resp = await http_client.post(
             f"{DSL_API_BASE_URL}/api/auth/login",
-            json={"username": "admin", "password": "admin123"},
+            json={"username": os.getenv("RESEARCH_API_USERNAME", "admin"), "password": research_password},
         )
         if login_resp.status_code != 200:
             return None
@@ -699,10 +702,13 @@ async def _start_strategy_via_api(instance_id: int, http_client=None) -> bool:
         http_client = httpx.AsyncClient(timeout=30.0)
         own_client = True
     try:
-        # 登录获取 token
+        research_password = os.getenv("RESEARCH_API_PASSWORD")
+        if not research_password:
+            _log("  [start] 未配置 RESEARCH_API_PASSWORD，无法通过 API 启动策略")
+            return False
         login_resp = await http_client.post(
             f"{DSL_API_BASE_URL}/api/auth/login",
-            json={"username": "admin", "password": "admin123"},
+            json={"username": os.getenv("RESEARCH_API_USERNAME", "admin"), "password": research_password},
         )
         if login_resp.status_code != 200:
             return False

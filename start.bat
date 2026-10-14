@@ -34,6 +34,6 @@ echo Both servers are starting...
 echo Backend API: http://127.0.0.1:8000/docs
 echo Frontend UI: http://127.0.0.1:5173
 echo.
-echo Default login: admin / admin123
+echo First use: set the admin password in the local login page.
 echo.
 pause

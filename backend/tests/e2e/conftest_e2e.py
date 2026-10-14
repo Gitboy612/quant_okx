@@ -71,7 +71,7 @@ def _ensure_test_user():
         if not user:
             user = User(
                 username="admin",
-                password_hash=hash_password("admin123"),
+                password_hash=hash_password("e2e-test-password"),
                 created_at=datetime.now(timezone.utc),
             )
             db.add(user)

@@ -145,7 +145,7 @@ fi
 printf '\n%s\n' 'QuantOKX 已启动：'
 printf '  前端界面：http://127.0.0.1:%s\n' "$FRONTEND_PORT"
 printf '  API 文档：http://127.0.0.1:%s/docs\n' "$BACKEND_PORT"
-printf '%s\n' '  初始账号：admin / admin123'
+printf '%s\n' '  首次使用：在本机登录页设置 admin 密码'
 printf '%s\n' '按 Ctrl+C 同时停止前端和后端。'
 
 open "http://127.0.0.1:${FRONTEND_PORT}" >/dev/null 2>&1 || true

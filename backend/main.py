@@ -1,4 +1,3 @@
-from datetime import datetime, timezone
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from config import FRONTEND_DIR, CORS_ORIGINS
@@ -22,9 +21,7 @@ from routers.notifications import router as notifications_router
 from routers.analytics import router as analytics_router
 from routers.sandbox import router as sandbox_router
 from services.strategy_engine import strategy_engine
-from models.user import User
 from models.strategy import StrategyInstance
-from services.auth_service import hash_password
 from database import SessionLocal
 
 app = FastAPI(title="QuantOKX", version="1.0.0")
@@ -65,15 +62,6 @@ async def startup():
 
     db = SessionLocal()
     try:
-        if db.query(User).count() == 0:
-            admin = User(
-                username="admin",
-                password_hash=hash_password("admin123"),
-                created_at=datetime.now(timezone.utc),
-            )
-            db.add(admin)
-            db.commit()
-
         # 启动恢复：保留 desired_status，标记 recovering，对账孤儿订单；
         # 不再盲目把 running/paused 改成 stopped（避免丢失用户意图）。
         try:

@@ -21,6 +21,8 @@
 | 方法与 URL | 认证 | 参数/请求体 | 成功响应 | 主要失败 | 处理函数 |
 |---|---:|---|---|---|---|
 | `POST /api/auth/login` | 否 | `LoginRequest` | `TokenResponse` | 401 用户名/密码错误；423 锁定 | `routers/auth.py:login` |
+| `GET /api/auth/setup-status` | 否 | 无 | `{setup_required: boolean}` | 查询是否需要首次设置 | `routers/auth.py:setup_status` |
+| `POST /api/auth/setup` | 本机且仅首次 | `password`、`confirm_password` | `TokenResponse` | 400 密码无效；403 非本机；409 已设置 | `routers/auth.py:initial_setup` |
 | `GET /api/auth/me` | 是 | 无 | `{"id":int,"username":string}` | 401 token/用户错误 | `get_me` |
 | `PUT /api/auth/password` | 是 | `ChangePasswordRequest` | `{"message":"密码修改成功"}` | 400 新密码少于 6 位；401 旧密码错误 | `change_password` |
 

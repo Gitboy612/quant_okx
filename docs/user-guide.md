@@ -63,10 +63,10 @@ INFO:     Application startup complete.
 ### 1.4 访问与登录
 
 - 开发模式浏览器打开 `http://127.0.0.1:5173`；构建后由后端托管时使用 `http://127.0.0.1:8000`
-- 默认管理员账号：`admin` / `admin123`
-- **首次登录后请立即修改密码**
+- 首次使用时，在服务器本机打开登录页，为 `admin` 自行设置密码（至少 8 个字符）。
+- 已有数据库保留原管理员密码；如部署在远程服务器，请通过服务器本机浏览器或 SSH 隧道完成首次设置。
 
-> 服务首次启动时会自动创建 `admin` 账户并初始化数据库（SQLite，位于 `data/quant_okx.db`）。
+> 服务首次启动时只初始化数据库（SQLite，位于 `data/quant_okx.db`）；管理员账户在首次设置时创建。
 
 ### 1.5 配置文件
 
@@ -77,6 +77,7 @@ INFO:     Application startup complete.
 | `HOST` | `127.0.0.1` | 服务监听地址 |
 | `PORT` | `8000` | 服务监听端口 |
 | `JWT_SECRET_KEY` | `quant-okx-secret-key-change-in-production` | JWT 签名密钥（**生产环境务必修改**） |
+| `RESEARCH_API_PASSWORD` | （空） | 可选；自动研究任务通过 API 启动策略时使用，填写已设置的管理员密码 |
 | `OKX_BASE_URL` | `https://openapi.okx.com` | OKX API 接入点 |
 | `OKX_PROXY` | （空） | HTTP 代理地址 |
 | `CORS_ORIGINS` | （空） | 允许的跨域来源（逗号分隔） |
@@ -589,7 +590,7 @@ QuantOKX 支持三种通知渠道：
 # 1. 登录获取 token
 curl -X POST http://127.0.0.1:8000/api/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"username": "admin", "password": "admin123"}'
+  -d '{"username": "admin", "password": "<首次设置的密码>"}'
 
 # 2. 启动沙箱
 curl -X POST http://127.0.0.1:8000/api/sandbox/start \
