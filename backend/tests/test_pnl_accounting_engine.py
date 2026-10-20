@@ -1,3 +1,4 @@
+from test_pnl_execution_regressions import ledger, trade, market
 """PnL 核算引擎单元测试。
 
 覆盖：
@@ -228,54 +229,19 @@ class TestIncrementalUpdate:
         assert snapshot is expected_snapshot
 
     @pytest.mark.asyncio
-    async def test_incremental_sells_match_new_buys_only(self):
-        """无基准买单时，卖单仅匹配新增买单 → 走增量路径，不委托 recompute
-
-        基准: realized=10, net_position=0, avg_buy=0 → 基准买单队列为空
-        新增: 2 buy (qty=1, px=105) + 1 sell (qty=1, px=115)
-        卖单匹配新增 buy@105（非基准买单），增量路径 FIFO 精确。
-        """
-        latest = MagicMock()
-        latest.realized_pnl = 10.0
-        latest.net_position = 0.0
-        latest.avg_buy_price = 0.0
-        latest.total_fee = 0.5
-        latest.order_count = 5
-        latest.equity = 5000.0
-
-        new_orders = [
-            _make_order(101, "buy", 105.0, 1.0, 0.1, actual_qty=1.0),
-            _make_order(102, "buy", 105.0, 1.0, 0.1, actual_qty=1.0),
-            _make_order(103, "sell", 115.0, 1.0, 0.1, actual_qty=1.0),
-        ]
-
-        instance = _make_instance(account_id=1, symbol="BTC-USDT", params={"fee_rate": 0.001})
-        mock_db = _make_incremental_mock_db(new_orders, instance=instance, latest_pnl=latest)
-
-        engine = PnlAccountingEngine()
-        with patch("services.pnl_accounting_engine.SessionLocal", return_value=mock_db):
-            snapshot = await engine.incremental_update(strategy_instance_id=1, client=None)
-
-        # net_position = 0 + 2(买) - 1(卖) = 1
-        assert snapshot.net_position == pytest.approx(1.0, rel=1e-9)
-        # avg_buy_price: 卖出 1 张后剩余 1 张 buy@105
-        assert snapshot.avg_buy_price == pytest.approx(105.0, rel=1e-9)
-        # realized_pnl: FIFO 配对，sell@115 匹配新增 buy@105
-        # buy_fee_per_unit=0.1, sell_fee_per_unit=0.1
-        # realized = 10(base) + (115-105)×1 - (0.1+0.1)×1 = 10 + 9.8 = 19.8
-        assert snapshot.realized_pnl == pytest.approx(19.8, rel=1e-9)
-        # total_fee = 0.5 + 3×0.1 = 0.8
-        assert snapshot.total_fee == pytest.approx(0.8, rel=1e-9)
-        # order_count = 5 + 3 = 8
-        assert snapshot.order_count == 8
-        # client=None → unrealized_pnl=0, total_pnl=realized+unrealized=19.8
-        assert snapshot.unrealized_pnl == pytest.approx(0.0, abs=1e-12)
-        assert snapshot.total_pnl == pytest.approx(19.8, rel=1e-9)
-        # equity 保留上次值
-        assert snapshot.equity == pytest.approx(5000.0, rel=1e-9)
-        # 验证写入 PnlRecord 并提交
-        mock_db.add.assert_called_once()
-        mock_db.commit.assert_called_once()
+    async def test_incremental_sells_match_new_buys_only(self, ledger):
+        """Replay executions instead of trusting an old cumulative snapshot."""
+        db, engine = ledger
+        trade(db, "buy", 105, 2, fee=0.2)
+        trade(db, "sell", 115, 1, fee=0.1)
+        db.add(PnlRecord(account_id=1, strategy_instance_id=1, realized_pnl=999,
+                         net_position=0, avg_buy_price=0))
+        db.commit()
+        snapshot = await engine.incremental_update(1, market(105))
+        assert snapshot.realized_pnl == pytest.approx(9.8)
+        assert snapshot.net_position == 1
+        assert snapshot.unrealized_pnl == pytest.approx(-0.1)
+        assert snapshot.total_pnl == pytest.approx(9.7)
 
 
 # ===========================================================================

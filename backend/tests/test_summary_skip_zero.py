@@ -1,3 +1,4 @@
+from test_pnl_execution_regressions import ledger, trade, market
 """Task 3 测试：summary 跳过全 0 记录与行情告警（spec: fix-pnl-attribution-qsm-loop）。
 
 覆盖：
@@ -221,49 +222,13 @@ class TestMarketDataUnavailableEvent:
 # ===========================================================================
 class TestPnlAnomalyZeroAvgBuyEvent:
     @pytest.mark.asyncio
-    async def test_pnl_anomaly_zero_avg_buy_event(self):
-        """avg_buy_price=0 且 net_position>0 时记录 pnl_anomaly_zero_avg_buy 事件。
-
-        使用 heartbeat_snapshot 触发兜底分支：基准 avg_buy_price=0, net_position=2，
-        当前价 50000 → 命中 avg_buy_price=0 && net_position>0 兜底。
-        """
-        latest = MagicMock()
-        latest.realized_pnl = 5.0
-        latest.net_position = 2.0
-        latest.avg_buy_price = 0.0  # 异常基准
-        latest.total_fee = 0.3
-        latest.order_count = 3
-        latest.equity = 1000.0
-
-        instance = MagicMock()
-        instance.account_id = 1
-        instance.symbol = "BTC-USDT"
-        instance.params = {"fee_rate": 0.001}
-
-        mock_db = _make_heartbeat_mock_db(instance=instance, latest_pnl=latest)
-
-        mock_client = MagicMock()
-        mock_client.get_ticker = AsyncMock(return_value=[{"last": "50000"}])
-
-        engine = PnlAccountingEngine()
-        with patch("services.pnl_accounting_engine.SessionLocal", return_value=mock_db), \
-             patch.object(engine, "_record_event") as mock_record:
-            snapshot = await engine.heartbeat_snapshot(
-                strategy_instance_id=1, client=mock_client
-            )
-
-        assert snapshot is not None
-        # 兜底生效：unrealized_pnl=0
-        assert snapshot.unrealized_pnl == pytest.approx(0.0, abs=1e-12)
-        # 记录 pnl_anomaly_zero_avg_buy 事件
-        mock_record.assert_called_once()
-        args, _ = mock_record.call_args
-        assert args[0] == 1  # strategy_instance_id
-        assert args[1] == "pnl_anomaly_zero_avg_buy"
-        details = args[3]
-        assert details["strategy_instance_id"] == 1
-        assert details["symbol"] == "BTC-USDT"
-        assert details["net_position"] == 2.0
+    async def test_pnl_anomaly_zero_avg_buy_event(self, ledger):
+        """Reject corrupt execution prices rather than publishing zero PnL."""
+        db, engine = ledger
+        trade(db, "buy", 0, 2)
+        with pytest.raises(ValueError, match="invalid execution price"):
+            await engine.heartbeat_snapshot(1, market(50000))
+        assert db.query(PnlRecord).count() == 0
 
 
 if __name__ == "__main__":

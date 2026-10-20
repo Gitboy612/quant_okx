@@ -1,3 +1,4 @@
+from test_pnl_execution_regressions import ledger, trade, market
 """heartbeat_snapshot 默认值心跳单元测试。
 
 覆盖策略运行时无成交也能定期写入心跳 PnlRecord 的三种场景：
@@ -102,95 +103,23 @@ class TestHeartbeatNoBaselineNoOrders:
 # ===========================================================================
 class TestHeartbeatWithBaseline:
     @pytest.mark.asyncio
-    async def test_heartbeat_with_baseline_updates_unrealized(self):
-        """有基准 PnlRecord 时，复用基准累计值并用当前价重算 unrealized_pnl。
-
-        基准: realized=10, net_position=2, avg_buy=100, total_fee=0.5, order_count=5, equity=5000
-        当前价: 120, fee_rate=0.001
-        unrealized = (120-100)*2 - 2*120*0.001 = 40 - 0.24 = 39.76
-        total_pnl = 10 + 39.76 = 49.76
-        """
-        latest = MagicMock()
-        latest.realized_pnl = 10.0
-        latest.net_position = 2.0
-        latest.avg_buy_price = 100.0
-        latest.total_fee = 0.5
-        latest.order_count = 5
-        latest.equity = 5000.0
-
-        instance = _make_instance(account_id=1, symbol="BTC-USDT", params={"fee_rate": 0.001})
-        mock_db = _make_heartbeat_mock_db(instance=instance, latest_pnl=latest)
-
-        # mock OKX client：get_ticker 返回当前价 120
-        mock_client = MagicMock()
-        mock_client.get_ticker = AsyncMock(return_value=[{"last": "120"}])
-
-        engine = PnlAccountingEngine()
-        with patch("services.pnl_accounting_engine.SessionLocal", return_value=mock_db):
-            snapshot = await engine.heartbeat_snapshot(strategy_instance_id=1, client=mock_client)
-
-        assert snapshot is not None
-        assert isinstance(snapshot, PnlSnapshot)
-        # realized_pnl 沿用最新记录
-        assert snapshot.realized_pnl == pytest.approx(10.0, rel=1e-9)
-        # unrealized_pnl 基于当前价重新计算
-        assert snapshot.unrealized_pnl == pytest.approx(39.76, rel=1e-9)
-        assert snapshot.total_pnl == pytest.approx(49.76, rel=1e-9)
-        # 累计字段沿用基准
-        assert snapshot.net_position == pytest.approx(2.0, rel=1e-9)
-        assert snapshot.avg_buy_price == pytest.approx(100.0, rel=1e-9)
-        assert snapshot.total_fee == pytest.approx(0.5, rel=1e-9)
-        assert snapshot.order_count == 5
-        assert snapshot.equity == pytest.approx(5000.0, rel=1e-9)
-        # 写入新 PnlRecord 并提交
-        mock_db.add.assert_called_once()
-        mock_db.commit.assert_called_once()
+    async def test_heartbeat_with_baseline_updates_unrealized(self, ledger):
+        db, engine = ledger
+        trade(db, "buy", 100, 2)
+        await engine.heartbeat_snapshot(1, market(120))
+        snapshot = await engine.heartbeat_snapshot(1, market(110))
+        assert snapshot.realized_pnl == 0
+        assert snapshot.unrealized_pnl == 20
 
 
-# ===========================================================================
-# 3. 行情获取失败 → unrealized_pnl=0，仍写心跳（不中断）
-# ===========================================================================
 class TestHeartbeatMarketError:
     @pytest.mark.asyncio
-    async def test_heartbeat_market_error_writes_zero_unrealized(self):
-        """行情获取失败时，unrealized_pnl=0，仍写心跳记录（不中断）。
-
-        基准: realized=10, net_position=2, avg_buy=100（有持仓，需取行情）
-        mock client.get_ticker 抛异常 → _get_current_price 返回 0.0
-        → unrealized_pnl 保持 0.0，心跳照常写入。
-        """
-        latest = MagicMock()
-        latest.realized_pnl = 10.0
-        latest.net_position = 2.0
-        latest.avg_buy_price = 100.0
-        latest.total_fee = 0.5
-        latest.order_count = 5
-        latest.equity = 5000.0
-
-        instance = _make_instance(account_id=1, symbol="BTC-USDT", params={"fee_rate": 0.001})
-        mock_db = _make_heartbeat_mock_db(instance=instance, latest_pnl=latest)
-
-        # mock OKX client：get_ticker 抛异常模拟行情获取失败
-        mock_client = MagicMock()
-        mock_client.get_ticker = AsyncMock(side_effect=Exception("market data unavailable"))
-
-        engine = PnlAccountingEngine()
-        # 屏蔽 _record_event 避免 market_data_unavailable 事件干扰 mock_db.add 计数
-        with patch("services.pnl_accounting_engine.SessionLocal", return_value=mock_db), \
-             patch.object(engine, "_record_event"):
-            snapshot = await engine.heartbeat_snapshot(strategy_instance_id=1, client=mock_client)
-
-        assert snapshot is not None
-        assert isinstance(snapshot, PnlSnapshot)
-        # 行情失败 → unrealized_pnl=0
-        assert snapshot.unrealized_pnl == pytest.approx(0.0, abs=1e-12)
-        # realized_pnl 沿用基准
-        assert snapshot.realized_pnl == pytest.approx(10.0, rel=1e-9)
-        # total_pnl = realized + unrealized = 10 + 0 = 10
-        assert snapshot.total_pnl == pytest.approx(10.0, rel=1e-9)
-        # 累计字段沿用基准
-        assert snapshot.net_position == pytest.approx(2.0, rel=1e-9)
-        assert snapshot.avg_buy_price == pytest.approx(100.0, rel=1e-9)
-        # 心跳照常写入（不中断）
-        mock_db.add.assert_called_once()
-        mock_db.commit.assert_called_once()
+    async def test_heartbeat_market_error_writes_zero_unrealized(self, ledger):
+        """A failed valuation must not erase the last valid profit."""
+        db, engine = ledger
+        trade(db, "buy", 100, 2)
+        await engine.heartbeat_snapshot(1, market(120))
+        with pytest.raises(ValueError, match="current market price"):
+            await engine.heartbeat_snapshot(1, market(0))
+        assert db.query(PnlRecord).count() == 1
+        assert db.query(PnlRecord).first().total_pnl == 40

@@ -663,8 +663,8 @@ class BaseStrategy(ABC):
         异常被捕获并记录事件，不抛出以避免阻塞 WS message_loop。
         """
         try:
-            fill_px = order_data.get("fillPx", "")
-            fill_sz = order_data.get("fillSz", "")
+            fill_px = order_data.get("avgPx") or order_data.get("fillPx", "")
+            fill_sz = order_data.get("accFillSz") or order_data.get("fillSz", "")
             fee = order_data.get("fee", "")
             u_time = order_data.get("uTime", "")
             self.order_manager.update_order(
@@ -673,6 +673,7 @@ class BaseStrategy(ABC):
                 fillPx=fill_px,
                 fillSz=fill_sz,
                 fee=fee,
+                feeCcy=order_data.get("feeCcy", ""),
                 uTime=u_time,
             )
         except Exception as e:
@@ -757,9 +758,10 @@ class BaseStrategy(ABC):
                     state = info[0].get("state", "")
                     if state == "filled":
                         self.order_manager.update_order(order.ordId, state="filled",
-                            fillPx=info[0].get("fillPx", ""),
-                            fillSz=info[0].get("fillSz", ""),
+                            fillPx=info[0].get("avgPx") or info[0].get("fillPx", ""),
+                            fillSz=info[0].get("accFillSz") or info[0].get("fillSz", ""),
                             fee=info[0].get("fee", ""),
+                            feeCcy=info[0].get("feeCcy", ""),
                             uTime=info[0].get("uTime", ""))
                         self._record_event("order_filled",
                             f"{order.side.upper()} 已成交(恢复): {symbol} ordId={order.ordId} px={order.px} qty={order.sz}",

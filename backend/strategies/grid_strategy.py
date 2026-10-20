@@ -848,9 +848,10 @@ class GridStrategy(BaseStrategy):
                                     self.order_manager.update_order(
                                         order.ordId,
                                         state=state,
-                                        fillPx=info[0].get("fillPx", ""),
-                                        fillSz=info[0].get("fillSz", ""),
+                                        fillPx=info[0].get("avgPx") or info[0].get("fillPx", ""),
+                                        fillSz=info[0].get("accFillSz") or info[0].get("fillSz", ""),
                                         fee=info[0].get("fee", ""),
+                                        feeCcy=info[0].get("feeCcy", ""),
                                         uTime=info[0].get("uTime", ""),
                                     )
                         except Exception:

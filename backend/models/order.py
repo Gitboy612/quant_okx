@@ -24,6 +24,7 @@ class Order(Base):
     fill_px = Column(Float, nullable=True)
     fill_sz = Column(Float, nullable=True)
     fee = Column(Float, nullable=True)
+    fee_ccy = Column(String, nullable=True)
     state = Column(String, nullable=True)
     status = Column(String, nullable=True)
     update_time = Column(String, nullable=True)

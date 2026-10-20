@@ -1,3 +1,4 @@
+from test_pnl_execution_regressions import ledger, trade, market
 """PnL 曲线稀疏与异常修复（fix-pnl-curve-sparse-and-anomaly）单元测试。
 
 覆盖 spec Task 7 的五个子任务：
@@ -130,34 +131,15 @@ def _make_heartbeat_mock_db(instance=None, latest_pnl=None):
 # ===========================================================================
 class TestIncrementalFallbackRecompute:
     @pytest.mark.asyncio
-    async def test_no_base_falls_back_to_recompute(self):
-        """无 PnlRecord 基准时，incremental_update 转 recompute，avg_buy_price 不为 0。
+    async def test_no_base_falls_back_to_recompute(self, ledger):
+        db, engine = ledger
+        trade(db, "buy", 100, 2, fee=0.2)
+        trade(db, "sell", 110, 1, fee=0.1)
+        snapshot = await engine.incremental_update(1, market(120))
+        assert snapshot.avg_buy_price == 100
+        assert snapshot.net_position == 1
+        assert snapshot.total_pnl == pytest.approx(29.7)
 
-        构造 2 buy (px=100, qty=1) + 1 sell (px=110, qty=1)，无最新 PnlRecord。
-        修复前：以 0 作为基准 avg_buy_price 增量叠加，产生异常。
-        修复后：转 recompute 全量核算，avg_buy_price=加权均价 100。
-        """
-        buys = [_make_order(i, "buy", 100.0, 1.0, 0.1, actual_qty=1.0) for i in range(1, 3)]
-        sells = [_make_order(3, "sell", 110.0, 1.0, 0.1, actual_qty=1.0)]
-        orders = buys + sells
-
-        instance = _make_instance(account_id=1, symbol="BTC-USDT")
-        mock_db = _make_fallback_mock_db(orders, instance=instance, latest_pnl=None)
-
-        engine = PnlAccountingEngine()
-        with patch("services.pnl_accounting_engine.SessionLocal", return_value=mock_db):
-            snapshot = await engine.incremental_update(strategy_instance_id=1, client=None)
-
-        assert snapshot is not None
-        assert isinstance(snapshot, PnlSnapshot)
-        # 关键：avg_buy_price 为加权均价 100，而非 0
-        assert snapshot.avg_buy_price == pytest.approx(100.0, rel=1e-9)
-        assert snapshot.avg_buy_price != 0
-        # net_position = 2(买) - 1(卖) = 1
-        assert snapshot.net_position == pytest.approx(1.0, rel=1e-9)
-        # 写入 PnlRecord 并提交
-        mock_db.add.assert_called_once()
-        mock_db.commit.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_no_base_no_extreme_unrealized(self):
@@ -185,48 +167,16 @@ class TestIncrementalFallbackRecompute:
 # ===========================================================================
 class TestHeartbeatSnapshot:
     @pytest.mark.asyncio
-    async def test_heartbeat_writes_and_recomputes_unrealized(self):
-        """心跳快照：复用最新 PnlRecord 的累计值，基于当前价重算 unrealized_pnl。
+    async def test_heartbeat_writes_and_recomputes_unrealized(self, ledger):
+        db, engine = ledger
+        trade(db, "buy", 100, 2)
+        first = await engine.heartbeat_snapshot(1, market(120))
+        second = await engine.heartbeat_snapshot(1, market(110))
+        assert first.unrealized_pnl == 40
+        assert second.unrealized_pnl == 20
+        assert second.realized_pnl == 0
+        assert db.query(PnlRecord).count() == 2
 
-        基准: realized=10, net_position=2, avg_buy=100, total_fee=0.5, order_count=5, equity=5000
-        当前价: 120, fee_rate=0.001
-        unrealized = (120-100)*2 - 2*120*0.001 = 40 - 0.24 = 39.76
-        total_pnl = 10 + 39.76 = 49.76
-        """
-        latest = MagicMock()
-        latest.realized_pnl = 10.0
-        latest.net_position = 2.0
-        latest.avg_buy_price = 100.0
-        latest.total_fee = 0.5
-        latest.order_count = 5
-        latest.equity = 5000.0
-
-        instance = _make_instance(account_id=1, symbol="BTC-USDT", params={"fee_rate": 0.001})
-        mock_db = _make_heartbeat_mock_db(instance=instance, latest_pnl=latest)
-
-        mock_client = MagicMock()
-        mock_client.get_ticker = AsyncMock(return_value=[{"last": "120"}])
-
-        engine = PnlAccountingEngine()
-        with patch("services.pnl_accounting_engine.SessionLocal", return_value=mock_db):
-            snapshot = await engine.heartbeat_snapshot(strategy_instance_id=1, client=mock_client)
-
-        assert snapshot is not None
-        assert isinstance(snapshot, PnlSnapshot)
-        # realized_pnl 沿用最新记录
-        assert snapshot.realized_pnl == pytest.approx(10.0, rel=1e-9)
-        # unrealized_pnl 基于当前价重新计算
-        assert snapshot.unrealized_pnl == pytest.approx(39.76, rel=1e-9)
-        assert snapshot.total_pnl == pytest.approx(49.76, rel=1e-9)
-        # 累计字段沿用
-        assert snapshot.net_position == pytest.approx(2.0, rel=1e-9)
-        assert snapshot.avg_buy_price == pytest.approx(100.0, rel=1e-9)
-        assert snapshot.total_fee == pytest.approx(0.5, rel=1e-9)
-        assert snapshot.order_count == 5
-        assert snapshot.equity == pytest.approx(5000.0, rel=1e-9)
-        # 写入新 PnlRecord 并提交
-        mock_db.add.assert_called_once()
-        mock_db.commit.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_heartbeat_no_latest_writes_zero(self):
@@ -269,68 +219,30 @@ class TestHeartbeatSnapshot:
 # ===========================================================================
 class TestAvgBuyPriceZeroFloor:
     @pytest.mark.asyncio
-    async def test_heartbeat_avg_buy_zero_floor(self):
-        """heartbeat_snapshot：avg_buy_price=0 且 net_position>0 → unrealized_pnl=0。
+    async def test_heartbeat_avg_buy_zero_floor(self, ledger):
+        """Rebuild corrupt snapshot costs from actual executions."""
+        db, engine = ledger
+        trade(db, "buy", 100, 2)
+        db.add(PnlRecord(account_id=1, strategy_instance_id=1,
+                         realized_pnl=5, net_position=2, avg_buy_price=0))
+        db.commit()
+        snapshot = await engine.heartbeat_snapshot(1, market(120))
+        assert snapshot.avg_buy_price == 100
+        assert snapshot.total_pnl == 40
 
-        构造异常基准 (net_position=2, avg_buy_price=0)，当前价 50000。
-        修复前：unrealized = (50000-0)*2 = 100000（极端值）。
-        修复后：兜底为 0。
-        """
-        latest = MagicMock()
-        latest.realized_pnl = 5.0
-        latest.net_position = 2.0
-        latest.avg_buy_price = 0.0  # 异常基准
-        latest.total_fee = 0.3
-        latest.order_count = 3
-        latest.equity = 1000.0
-
-        instance = _make_instance(account_id=1, symbol="BTC-USDT", params={"fee_rate": 0.001})
-        mock_db = _make_heartbeat_mock_db(instance=instance, latest_pnl=latest)
-
-        mock_client = MagicMock()
-        mock_client.get_ticker = AsyncMock(return_value=[{"last": "50000"}])
-
-        engine = PnlAccountingEngine()
-        with patch("services.pnl_accounting_engine.SessionLocal", return_value=mock_db):
-            snapshot = await engine.heartbeat_snapshot(strategy_instance_id=1, client=mock_client)
-
-        assert snapshot is not None
-        # 兜底：unrealized_pnl=0，非极端值
-        assert snapshot.unrealized_pnl == pytest.approx(0.0, abs=1e-12)
-        assert snapshot.total_pnl == pytest.approx(5.0, rel=1e-9)
 
     @pytest.mark.asyncio
-    async def test_incremental_avg_buy_zero_floor(self):
-        """incremental_update：base avg_buy_price=0 且仅新增 sell → avg_buy 仍为 0，兜底 unrealized=0。
-
-        基准: net_position=2, avg_buy_price=0（异常）。新增 1 sell (px=110, qty=1)。
-        卖出不重置 avg_buy，故 avg_buy 仍为 0；net_position=1>0 → 兜底 unrealized=0。
-        """
-        latest = MagicMock()
-        latest.realized_pnl = 5.0
-        latest.net_position = 2.0
-        latest.avg_buy_price = 0.0
-        latest.total_fee = 0.3
-        latest.order_count = 3
-        latest.equity = 1000.0
-
-        new_orders = [_make_order(10, "sell", 110.0, 1.0, 0.1, actual_qty=1.0)]
-        instance = _make_instance(account_id=1, symbol="BTC-USDT", params={"fee_rate": 0.001})
-        mock_db = _make_incremental_mock_db(new_orders, instance=instance, latest_pnl=latest)
-
-        mock_client = MagicMock()
-        mock_client.get_ticker = AsyncMock(return_value=[{"last": "50000"}])
-
-        engine = PnlAccountingEngine()
-        with patch("services.pnl_accounting_engine.SessionLocal", return_value=mock_db):
-            snapshot = await engine.incremental_update(strategy_instance_id=1, client=mock_client)
-
-        assert snapshot is not None
-        # net_position = 2 - 1 = 1
-        assert snapshot.net_position == pytest.approx(1.0, rel=1e-9)
-        # 兜底：avg_buy_price=0 且 net_position>0 → unrealized_pnl=0
-        assert snapshot.avg_buy_price == pytest.approx(0.0, abs=1e-12)
-        assert snapshot.unrealized_pnl == pytest.approx(0.0, abs=1e-12)
+    async def test_incremental_avg_buy_zero_floor(self, ledger):
+        db, engine = ledger
+        trade(db, "buy", 100, 2)
+        trade(db, "sell", 110, 1)
+        db.add(PnlRecord(account_id=1, strategy_instance_id=1,
+                         realized_pnl=5, net_position=2, avg_buy_price=0))
+        db.commit()
+        snapshot = await engine.incremental_update(1, market(120))
+        assert snapshot.net_position == 1
+        assert snapshot.avg_buy_price == 100
+        assert snapshot.total_pnl == 30
 
 
 # ===========================================================================

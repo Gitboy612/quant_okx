@@ -21,6 +21,7 @@ class OrderInfo:
     fillPx: str = ""
     fillSz: str = ""
     fee: str = ""
+    feeCcy: str = ""
     cTime: str = ""
     uTime: str = ""
     ct_val: float = 1.0
@@ -41,6 +42,7 @@ class OrderInfo:
             "fillPx": self.fillPx,
             "fillSz": self.fillSz,
             "fee": self.fee,
+            "feeCcy": self.feeCcy,
             "cTime": self.cTime,
             "uTime": self.uTime,
             "ct_val": self.ct_val,
@@ -314,6 +316,7 @@ class OrderManager:
                         fillPx=str(row.fill_px) if row.fill_px else "",
                         fillSz=str(row.fill_sz) if row.fill_sz else "",
                         fee=str(row.fee) if row.fee else "",
+                        feeCcy=row.fee_ccy or "",
                         uTime=row.update_time or "",
                         ct_val=row.ct_val if row.ct_val is not None else 1.0,
                         ct_type=row.ct_type or "",
@@ -370,6 +373,7 @@ class OrderManager:
                 existing.fill_px = float(order.fillPx) if order.fillPx else None
                 existing.fill_sz = float(order.fillSz) if order.fillSz else None
                 existing.fee = float(order.fee) if order.fee else None
+                existing.fee_ccy = order.feeCcy or existing.fee_ccy
                 existing.filled_quantity = float(order.fillSz) if order.fillSz else 0
                 existing.status = self._map_state_to_status(order.state)
                 existing.update_time = order.uTime
@@ -393,6 +397,7 @@ class OrderManager:
                     fill_px=float(order.fillPx) if order.fillPx else None,
                     fill_sz=float(order.fillSz) if order.fillSz else None,
                     fee=float(order.fee) if order.fee else None,
+                    fee_ccy=order.feeCcy or None,
                     state=order.state,
                     status=self._map_state_to_status(order.state),
                     update_time=order.uTime,
@@ -416,6 +421,7 @@ class OrderManager:
                         existing.fill_px = float(order.fillPx) if order.fillPx else None
                         existing.fill_sz = float(order.fillSz) if order.fillSz else None
                         existing.fee = float(order.fee) if order.fee else None
+                        existing.fee_ccy = order.feeCcy or existing.fee_ccy
                         existing.filled_quantity = float(order.fillSz) if order.fillSz else 0
                         existing.update_time = order.uTime
                         existing.updated_at = datetime.now(timezone.utc)

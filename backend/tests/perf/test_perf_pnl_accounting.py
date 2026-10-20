@@ -18,7 +18,8 @@ import os
 import sys
 import time
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, AsyncMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -40,7 +41,7 @@ pytestmark = pytest.mark.perf
 def _make_order(oid: int, side: str, px: float, qty: float, fee: float,
                 actual_qty: float | None = None, symbol: str = "BTC-USDT"):
     """构造 mock Order 对象，模拟 filled 订单。"""
-    o = MagicMock()
+    o = SimpleNamespace(ct_type="", fee_ccy=None, update_time=None, ct_val=1.0)
     o.id = oid
     o.side = side
     o.fill_px = px
@@ -115,7 +116,7 @@ def _make_incremental_mock_db(new_orders, instance=None, latest_pnl=None):
         if model is StrategyInstance:
             chain.filter.return_value.first.return_value = instance
         elif model is Order:
-            chain.filter.return_value.filter.return_value.filter.return_value.all.return_value = new_orders
+            chain.filter.return_value.filter.return_value.all.return_value = new_orders
             chain.filter.return_value.update.return_value = 0
         elif model is PnlRecord:
             chain.filter.return_value.order_by.return_value.first.return_value = latest_pnl
@@ -227,6 +228,8 @@ async def test_incremental_update_single_order():
     new_orders = [_make_order(101, "buy", 105.0, 1.0, 0.1, actual_qty=1.0)]
     instance = _make_mock_instance()
     engine = PnlAccountingEngine()
+    client = MagicMock()
+    client.get_ticker = AsyncMock(return_value=[{"last": "105"}])
 
     with patch("services.pnl_accounting_engine.SessionLocal") as mock_session_local:
         # warm up（5 轮，让 MagicMock 内部缓存生效）
@@ -234,7 +237,7 @@ async def test_incremental_update_single_order():
             mock_session_local.return_value = _make_incremental_mock_db(
                 new_orders, instance=instance, latest_pnl=latest
             )
-            await engine.incremental_update(strategy_instance_id=1, client=None)
+            await engine.incremental_update(strategy_instance_id=1, client=client)
 
         # 测量 10 轮取最小值
         times = []
@@ -243,7 +246,7 @@ async def test_incremental_update_single_order():
                 new_orders, instance=instance, latest_pnl=latest
             )
             start = time.perf_counter()
-            snapshot = await engine.incremental_update(strategy_instance_id=1, client=None)
+            snapshot = await engine.incremental_update(strategy_instance_id=1, client=client)
             times.append((time.perf_counter() - start) * 1000)
 
     elapsed_ms = min(times)
@@ -251,7 +254,7 @@ async def test_incremental_update_single_order():
 
     print(f"\n[perf] incremental_update 1 order: min={elapsed_ms:.3f}ms, avg={avg_ms:.3f}ms (10 iters)")
     assert snapshot is not None
-    assert snapshot.order_count == 6  # 5 base + 1 new
+    assert snapshot.order_count == 1  # Replay counts actual executions, not snapshot counters.
     assert elapsed_ms < 5.0, f"单条订单 incremental_update 耗时 {elapsed_ms:.2f}ms 超过 5ms 基准"
 
 
@@ -281,7 +284,7 @@ async def test_incremental_update_10_orders():
 
     print(f"\n[perf] incremental_update 10 orders: {elapsed_ms:.3f}ms")
     assert snapshot is not None
-    assert snapshot.order_count == 15  # 5 base + 10 new
+    assert snapshot.order_count == 10
     assert elapsed_ms < 10.0, f"10 条订单 incremental_update 耗时 {elapsed_ms:.2f}ms 超过 10ms"
 
 

@@ -209,9 +209,10 @@ class TrendStrategy(BaseStrategy):
                 self.order_manager.update_order(
                     order.ordId,
                     state=state,
-                    fillPx=info.get("fillPx", ""),
-                    fillSz=info.get("fillSz", ""),
+                    fillPx=info.get("avgPx") or info.get("fillPx", ""),
+                    fillSz=info.get("accFillSz") or info.get("fillSz", ""),
                     fee=info.get("fee", ""),
+                    feeCcy=info.get("feeCcy", ""),
                     uTime=info.get("uTime", ""),
                 )
             except Exception as e:

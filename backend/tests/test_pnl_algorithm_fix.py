@@ -190,7 +190,7 @@ class TestPnlSummary:
         """构造 mock db，使 query().order_by().limit().all() 返回 records。"""
         mock_db = MagicMock()
         # account_id=None 时不会调用 filter，链路：query().order_by().limit().all()
-        mock_db.query.return_value.order_by.return_value.limit.return_value.all.return_value = records
+        mock_db.query.return_value.order_by.return_value.all.return_value = records
         return mock_db
 
     def test_summary_unrealized_not_summed(self):

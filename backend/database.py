@@ -69,6 +69,7 @@ def _migrate_orders_columns():
     existing_columns = {c["name"] for c in insp.get_columns("orders")}
     # 缺失列按 main.sql 顺序补齐（SQLite ALTER TABLE 只能追加到末尾，顺序由查询层不敏感）
     missing_defs = [
+        ("fee_ccy", "VARCHAR"),
         ("cl_ord_id", "VARCHAR"),
         ("fill_px", "FLOAT"),
         ("fill_sz", "FLOAT"),

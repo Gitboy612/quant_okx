@@ -1,6 +1,6 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, HTTPException
 from sqlalchemy.orm import Session
 from database import get_db
 from models.pnl import PnlRecord
@@ -112,7 +112,7 @@ def get_pnl_summary(
     if strategy_instance_id is not None:
         query = query.filter(PnlRecord.strategy_instance_id == strategy_instance_id)
 
-    records = query.order_by(PnlRecord.recorded_at.desc()).limit(500).all()
+    records = query.order_by(PnlRecord.recorded_at.desc(), PnlRecord.id.desc()).all()
     if not records:
         return {"total_realized_pnl": 0, "total_unrealized_pnl": 0, "total_pnl": 0, "latest_equity": 0, "by_strategy": []}
 
@@ -135,6 +135,12 @@ def get_pnl_summary(
             continue
         realized = latest_for_strategy.realized_pnl or 0
         unrealized = latest_for_strategy.unrealized_pnl or 0
+        valued_at = latest_for_strategy.recorded_at
+        if valued_at is not None and valued_at.tzinfo is None:
+            valued_at = valued_at.replace(tzinfo=timezone.utc)
+        stale = bool(latest_for_strategy.net_position) and (
+            valued_at is None or (datetime.now(timezone.utc) - valued_at).total_seconds() > 60
+        )
         by_strategy.append({
             "strategy_instance_id": sid,
             "realized_pnl": realized,
@@ -145,6 +151,8 @@ def get_pnl_summary(
             "avg_buy_price": latest_for_strategy.avg_buy_price,
             "total_fee": latest_for_strategy.total_fee,
             "order_count": latest_for_strategy.order_count,
+            "valued_at": valued_at.isoformat() if valued_at else None,
+            "valuation_stale": stale,
         })
 
     if strategy_instance_id is not None:
@@ -178,7 +186,10 @@ async def recompute_pnl(
     from services.pnl_accounting_engine import pnl_accounting_engine
 
     client = await pnl_accounting_engine._get_client(strategy_id)
-    snapshot = await pnl_accounting_engine.recompute(strategy_id, client)
+    try:
+        snapshot = await pnl_accounting_engine.recompute(strategy_id, client)
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     # 无成交订单时不返回全 0，返回失败信息
     if snapshot is None:
         return {"success": False, "message": "无成交订单"}

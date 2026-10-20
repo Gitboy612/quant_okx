@@ -217,6 +217,7 @@ async def test_trend_rest_sync_updates_filled_market_order():
         fillPx="64512.7",
         fillSz="0.01",
         fee="-0.0032",
+        feeCcy="",
         uTime="123",
     )
 
